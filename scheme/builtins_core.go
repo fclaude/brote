@@ -32,6 +32,7 @@ func (in *Interp) registerBuiltins() {
 	in.registerLists()
 	in.registerStrings()
 	in.registerVectors()
+	in.registerHashes()
 	in.registerCore()
 	in.registerJSON()
 	in.registerMeta()

@@ -93,7 +93,7 @@ func paramsSchema(params []Param) ToolSchema {
 			prop.Type = pa.Type
 		case "list", "vector":
 			prop.Type = "array"
-		case "alist":
+		case "alist", "hash":
 			prop.Type = "object"
 		}
 		if len(pa.Items) > 0 {
@@ -274,6 +274,8 @@ func checkParamType(pa Param, v Value) error {
 		ok = v.IsList()
 	case "vector":
 		ok = v.Kind == KVec
+	case "hash":
+		ok = v.Kind == KHash
 	}
 	if !ok {
 		return errorf("type", "expected %s, got %s", pa.Type, Write(v))
@@ -432,6 +434,31 @@ func jsonEncode(buf *bytes.Buffer, v Value, depth int) error {
 			}
 		}
 		buf.WriteByte(']')
+	case KHash:
+		buf.WriteByte('{')
+		first := true
+		var err error
+		v.Hash.each(func(k, val Value) {
+			if err != nil {
+				return
+			}
+			if k.Kind != KString {
+				err = fmt.Errorf("cannot emit a hash with the key %s: JSON object keys are strings", Write(k))
+				return
+			}
+			if !first {
+				buf.WriteByte(',')
+			}
+			first = false
+			b, _ := json.Marshal(k.S)
+			buf.Write(b)
+			buf.WriteByte(':')
+			err = jsonEncode(buf, val, depth+1)
+		})
+		if err != nil {
+			return err
+		}
+		buf.WriteByte('}')
 	default:
 		return fmt.Errorf("cannot emit %s", Write(v))
 	}
