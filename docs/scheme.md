@@ -1,8 +1,8 @@
-# Brote Scheme — language reference
+# Brote Scheme: language reference
 
 Brote is a small Scheme for embedding in a Go program. A program written in it
-decides *what to do*; every effect — reading a file, running a command, calling
-a service — is a Go **primitive** that the host registers, and every primitive
+decides *what to do*; every effect (reading a file, running a command, calling
+a service) is a Go **primitive** that the host registers, and every primitive
 application passes through one optional **gate** the host installs. Scheme
 code never touches the network or the filesystem on its own; the one builtin
 that reads a file, `load`, is a primitive like the rest and the gate sees it.
@@ -49,7 +49,7 @@ reading lines.
 `"""` begins a raw string and the next `"""` ends it. Nothing between them
 is an escape, so quotes and backslashes are themselves:
 
-```scheme
+```lisp
 (define pattern """\d+\.\d+""")
 ```
 
@@ -60,7 +60,7 @@ removed, and the newline before the closing delimiter is dropped. A block
 therefore reads at the indentation it is written at and produces text with
 none:
 
-```scheme
+```lisp
 (define instructions
   """
   Prefer table-driven tests.
@@ -91,9 +91,10 @@ already does.
 | symbol | `foo` | `symbol?` | interned by name |
 | pair / list | `(1 2 3)` `(a . b)` | `pair?` `list?` | lists are chains of pairs ending in `()`; no mutation |
 | vector | `#(1 2 "x")` | `vector?` | indexed array; `vector-set!` mutates; no mutation of lists |
+| hash table | `#<hash ("a" . 1) (b . 2)>` | `hash?` | a mutable map from strings, symbols, integers and booleans, listed in the order the keys were added. It prints this way but has no written form to read back |
 | procedure | `#<procedure f>` `#<primitive car>` | `procedure?` | closures and primitives are both procedures |
 | handle | `#<cred:class:id>` | `handle?` | opaque value a host primitive hands out: a program can pass it around and compare it, never open it. No builtin converts it to a string, and everything derived from it carries its class as a provenance tag (§5) |
-| void | `#<void>` | — | result of `define`, `set!`, `display`, …; the REPL does not print it |
+| void | `#<void>` | none | result of `define`, `set!`, `display`, …; the REPL does not print it |
 
 `number?` is true for integers and floats.
 
@@ -135,10 +136,10 @@ already does.
 | `(let* ((v e) …) body …)` | bind sequentially |
 | `(letrec ((v e) …) body …)` | mutual bindings: every initializer may reference the other names (a closure resolves them at call time) |
 | `(case key [(datum …) body …] … [(else body …)])` | first clause whose datum list contains a member `equal?` to the key wins; no clause → void |
-| `(do ((v init [step]) …) (test [e …]) cmd …)` | loop: check `test`; on false evaluate the `cmd`s, then the `step`s (in parallel), rebind, repeat. Value is the test clause's last `e` (void if none). A Go loop — constant stack |
+| `(do ((v init [step]) …) (test [e …]) cmd …)` | loop: check `test`; on false evaluate the `cmd`s, then the `step`s (in parallel), rebind, repeat. Value is the test clause's last `e` (void if none). A Go loop, so constant stack |
 | `(when test e …)` | `e …` only if `test` is true; yields void otherwise |
 | `(unless test e …)` | `e …` only if `test` is false; yields void otherwise |
-| `(guard (var clause …) body …)` | evaluate `body …`; if it raises a Scheme error, bind `var` to the condition — an alist `((message . "text") (irritants …))` — and try the clauses like `cond` (`(test body …)`, `(test => proc)`, `(else …)`). The first true clause's value is the value of `guard`; no match re-raises. A guard **denial** and a **cancellation** are never catchable |
+| `(guard (var clause …) body …)` | evaluate `body …`; if it raises a Scheme error, bind `var` to the condition (an alist `((message . "text") (irritants …))`) and try the clauses like `cond` (`(test body …)`, `(test => proc)`, `(else …)`). The first true clause's value is the value of `guard`; no match re-raises. A guard **denial** and a **cancellation** are never catchable |
 | `(with-output-to-string e …)` | evaluate `e …` with `display`/`write`/`newline` captured; return the captured text (a minimal string port) |
 | `(begin e …)` | evaluate in order, yield the last |
 | `(set! name expr)` | assign an **existing** binding; error if unbound |
@@ -161,7 +162,7 @@ of error with a message of the form `who: what`.
 
 Errors may be caught with `guard` (§3):
 
-```scheme
+```lisp
 (guard (e ((string-contains? (assoc-ref e 'message) "boom") 'caught)
           (else (assoc-ref e 'irritants)))
   (error "boom" 1 2))            ; caught
@@ -240,6 +241,33 @@ primitive in the table (§7) and can be listed with `(primitives)`.
 `equal?` compares vectors elementwise; `eq?`/`eqv?` compare vectors by
 identity.
 
+### Hash tables
+
+| | |
+|---|---|
+| `(make-hash)` `(hash? x)` | a new empty table / predicate |
+| `(hash-set! h key v)` | store `v` under `key`, replacing what was there; yields void. A key already in the table keeps its place in the order |
+| `(hash-ref h key [default])` | the value under `key`. When `key` is missing, `default` if one was given (it's the value itself, so a procedure is not called), otherwise an error that names the key |
+| `(hash-has? h key)` | true if the table has an entry for `key` |
+| `(hash-remove! h key)` | remove the entry; a missing key is not an error. Adding the key again puts it at the end |
+| `(hash-count h)` | number of entries |
+| `(hash-keys h)` `(hash-values h)` `(hash->alist h)` | the keys, the values, or `(key . value)` pairs, as new lists in the order the keys were added |
+| `(alist->hash al)` | a table from an association list. A key that appears twice keeps its first place and takes the later value |
+| `(hash-update! h key proc [default])` | store `(proc old)` under `key`, where `old` is the current value, or `default` when the key is missing (an error naming the key when there is no default). If `proc` raises an error nothing is stored |
+
+A key is a string, a symbol, an integer or a boolean, and two keys are the
+same when `equal?` says so: the string `"a"` and the symbol `a` are different
+keys, and so are `1` and `#t`. Any other key is an error that names its type.
+Values can be anything, including tables, and a table can hold itself.
+
+Tables are shared the way vectors are: `(define g h)` makes a second name for
+one table. `equal?` and `eq?` on tables are identity, so two empty tables are
+not `equal?`. `write` and `display` print `#<hash (key . value) …>`; a table
+met again inside itself prints as `#<hash ...>`. `json-emit` writes a table as
+an object when every key is a string, and is an error otherwise (§5 JSON).
+`json-parse` still gives an association list, and `alist->hash` turns that into
+a table.
+
 ### Strings
 
 | | |
@@ -249,7 +277,7 @@ identity.
 | `(substring s start [end])` | rune indices; `end` defaults to the length; out of range is an error |
 | `(string=? a b …)` `(string<? a b …)` | |
 | `(string-upcase s)` `(string-downcase s)` `(string-trim s)` | `string-trim` strips Unicode whitespace at both ends |
-| `(string-split s sep)` | `sep` is a literal separator, not a regex; empty `sep` is an error |
+| `(string-split s sep)` | `sep` is a literal separator (no regular expressions); empty `sep` is an error |
 | `(string-join l sep)` | |
 | `(string-contains? s sub)` `(string-prefix? prefix s)` `(string-suffix? suffix s)` | |
 | `(string-replace s old new)` | replace every occurrence |
@@ -309,7 +337,7 @@ float cannot be emitted.
 ### Provenance
 
 Every value carries **provenance tags**: a set of strings saying where it
-came from, not what it contains. The interpreter mints none of its own. A host
+came from, which can differ from what it contains. The interpreter mints none of its own. A host
 primitive declares the tag its result carries (`Meta.TaintSource`, such as
 `external:file`), a handle carries `cred:<class>`, and the tags of a call's
 arguments flow into its result.
@@ -324,7 +352,8 @@ Propagation happens at the primitive dispatch. A list keeps each element's
 tags on the element, and a list built without a primitive (by `map`, by
 quasiquote, or holding what `vector-set!` put in a vector) may carry none of
 its own; so a string a primitive makes from a list or a vector (`string-join`,
-`json-emit`) takes the tags of everything in it, as do the output
+`json-emit`) takes the tags of everything in it, hash tables included (keys
+and values), as do the output
 `with-output-to-string` captures and the message `guard` hands on from an
 error that quoted a tagged value. A primitive whose result *measures* its
 arguments rather than being made of them carries nothing (`Meta.TaintOpaque`):
@@ -360,6 +389,16 @@ environment before anything else. It defines, in Scheme:
 | `(assoc-ref al key [default])` | `cdr` of `(assoc key al)`, or `default` (void if absent) |
 | `(identity x)` | |
 | `(compose f g)` | `(lambda args (f (apply g args)))` |
+| `(first l)` `(second l)` `(third l)` `(rest l)` | `car`, `cadr`, `caddr`, `cdr` |
+| `(take l n)` `(drop l n)` `(last l)` | first `n` elements, all but the first `n`, the final element; an error when the list is too short or, for `last`, empty |
+| `(any pred l)` `(every pred l)` | the first true value `pred` gives (`#f` if none) / `pred`'s last value if it is true for every element (`#t` for `()`) |
+| `(count pred l)` `(list-index pred l)` | how many elements satisfy `pred` / the index of the first, or `#f` |
+| `(remove pred l)` `(delete x l)` `(delete-duplicates l)` | `l` without the elements that satisfy `pred` / that are `equal?` to `x` / that repeat an earlier one |
+| `(partition pred l)` | a list of two lists: the elements that satisfy `pred`, then the rest |
+| `(filter-map f l)` `(append-map f l)` | `map`, keeping the true results / appending the list results |
+| `(string-index s sub)` | the rune index of the first occurrence of `sub` in `s`, or `#f` |
+| `(string-pad-left s n [pad])` `(string-pad-right s n [pad])` | add `pad` (default `" "`) at the left or right until `s` is at least `n` runes long; never cuts |
+| `(vector-map f v)` `(vector-for-each f v)` | `map` and `for-each` over one vector (`vector-map` makes a new vector) |
 | `(string-empty? s)` | |
 
 ## 7. Primitives and the gate
@@ -390,8 +429,8 @@ fields, `preview` and the parameter **roles** (`path`, `source`, `dest`,
 and `position`) are declarations the gate reads. A program written for a host
 that has no gate loses nothing by ignoring them.
 
-**Application of a primitive** — whether from the host, the prelude, a `.scm`
-file or the REPL — goes through exactly one Go function, which:
+**Application of a primitive**, whether from the host, the prelude, a `.scm`
+file or the REPL, goes through exactly one Go function, which:
 
 1. checks the argument count against `params`/`variadic`;
 2. asks the **gate** (when one is installed) for a decision; a denial raises
@@ -400,7 +439,7 @@ file or the REPL — goes through exactly one Go function, which:
 
 `register-tool` adds a primitive whose handler applies a Scheme procedure:
 
-```scheme
+```lisp
 (register-tool "square-all"
   (lambda (xs) (map (lambda (x) (* x x)) xs))
   '((doc . "Square every number in a list")
@@ -423,7 +462,7 @@ calls pass the gate in turn.
 needs a gate that implements `RegisterChecker` (without one it is an error),
 and it is refused to an evaluation whose origin is not the user's (§8):
 
-```scheme
+```lisp
 (register-check "no-external-llms" "confirm"
   (lambda (prim-name args)
     (or (equal? prim-name "shell-exec")
@@ -464,8 +503,8 @@ user's, so an embedder gives the user's powers (`wipe`, `register-check`) only
 where it says so. The interpreter attaches one meaning to the origin:
 `register-check` is refused unless it is the user's. A gate may attach more.
 
-The rest — lifecycle, errors, cancellation, concurrency, writing a host
-primitive, writing a gate — is in [embedding.md](embedding.md).
+The rest (lifecycle, errors, cancellation, concurrency, writing a host
+primitive, writing a gate) is in [embedding.md](embedding.md).
 
 ## 9. Not in Brote Scheme
 
@@ -473,10 +512,10 @@ Deliberately absent.
 
 - characters and the full string-port API (only `with-output-to-string`)
 - source positions in runtime errors (reader errors carry positions)
-- `define-macro` — the prelude does not need it
+- `define-macro`, which the prelude does not need
 - `set-car!` / `set-cdr!` and string mutation
 - nested quasiquote
 - hygienic macros (`define-syntax`, `syntax-rules`)
 - `call/cc`, `dynamic-wind`
-- an `eval` primitive — the kernel surface is not exposed to programs
+- an `eval` primitive: the kernel surface is not exposed to programs
 - exact rationals and bignums

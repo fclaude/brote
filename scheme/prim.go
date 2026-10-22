@@ -354,13 +354,14 @@ func argsTaint(p *Prim, args []Value) Taint {
 	return t
 }
 
-// DeepTaint is v's taint and that of everything it holds, through pairs and
-// vectors, to MaxDepth. A vector may hold itself, so each is walked once.
+// DeepTaint is v's taint and that of everything it holds, through pairs,
+// vectors and hash tables (keys and values), to MaxDepth. A vector or a table
+// may hold itself, so each is walked once.
 func DeepTaint(v Value) Taint {
-	return deepTaint(v, 0, map[*Vector]bool{})
+	return deepTaint(v, 0, map[any]bool{})
 }
 
-func deepTaint(v Value, depth int, seen map[*Vector]bool) Taint {
+func deepTaint(v Value, depth int, seen map[any]bool) Taint {
 	t := v.Taint
 	for ; depth <= MaxDepth; depth++ {
 		switch v.Kind {
@@ -376,6 +377,14 @@ func deepTaint(v Value, depth int, seen map[*Vector]bool) Taint {
 			for _, item := range v.V.Items {
 				t = Union(t, deepTaint(item, depth+1, seen))
 			}
+		case KHash:
+			if seen[v.Hash] {
+				return t
+			}
+			seen[v.Hash] = true
+			v.Hash.each(func(k, val Value) {
+				t = Union(t, deepTaint(k, depth+1, seen), deepTaint(val, depth+1, seen))
+			})
 		}
 		return t
 	}

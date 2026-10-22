@@ -1,6 +1,6 @@
-;; nodwyn prelude — loaded into the global environment before anything else.
-;; Documented in docs/scheme.md §6. Keep it small: anything here is part of
-;; the language contract.
+;; Brote prelude: loaded into the global environment before anything else.
+;; Documented in docs/scheme.md §6 and docs/stdlib.md. Keep it small: anything
+;; here is part of the language contract.
 
 (define (assoc-ref alist key . default)
   (let ((hit (assoc key alist)))

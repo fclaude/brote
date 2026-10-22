@@ -35,6 +35,7 @@ const (
 	KHandle             // opaque credential handle (P3)
 	KVec                // vector: a mutable, indexable array
 	KVoid               // the unspecified value
+	KHash               // hash table: a mutable map from strings, symbols, integers and booleans
 )
 
 func (k Kind) String() string {
@@ -61,6 +62,8 @@ func (k Kind) String() string {
 		return "vector"
 	case KVoid:
 		return "void"
+	case KHash:
+		return "hash"
 	}
 	return "unknown"
 }
@@ -79,6 +82,7 @@ type Value struct {
 	Prim *Prim
 	H    *Handle
 	V    *Vector // KVec
+	Hash *Hash   // KHash
 }
 
 // Vector is the shared storage behind a vector value; vector-set! mutates
@@ -218,6 +222,8 @@ func Eqv(a, b Value) bool {
 		return a.H == b.H
 	case KVec:
 		return a.V == b.V
+	case KHash:
+		return a.Hash == b.Hash
 	}
 	return false
 }
@@ -260,14 +266,14 @@ func equal(a, b Value, depth int) bool {
 // Write renders v in machine form (strings quoted), as the reader reads it.
 func Write(v Value) string {
 	var sb strings.Builder
-	print(&sb, v, true, nil, 0)
+	print(&sb, v, true, nil, 0, &printState{})
 	return sb.String()
 }
 
 // Display renders v in human form (strings as their text).
 func Display(v Value) string {
 	var sb strings.Builder
-	print(&sb, v, false, nil, 0)
+	print(&sb, v, false, nil, 0, &printState{})
 	return sb.String()
 }
 
@@ -275,17 +281,45 @@ func Display(v Value) string {
 // It also visits strings in pairs and vectors, without changing the value.
 func WriteWithStrings(v Value, transform func(string) string) string {
 	var sb strings.Builder
-	print(&sb, v, true, transform, 0)
+	print(&sb, v, true, transform, 0, &printState{})
 	return sb.String()
 }
 
 // String implements fmt.Stringer as Write.
 func (v Value) String() string { return Write(v) }
 
+// printState carries what printing needs to remember between nested values:
+// the hash tables being written, so one that holds itself prints as #<hash ...>
+// at the inner level and does not branch into every path through it.
+type printState struct {
+	hashes map[*Hash]bool
+}
+
+func printHash(sb *strings.Builder, h *Hash, write bool, transform func(string) string, depth int, st *printState) {
+	if st.hashes[h] {
+		sb.WriteString("#<hash ...>")
+		return
+	}
+	if st.hashes == nil {
+		st.hashes = map[*Hash]bool{}
+	}
+	st.hashes[h] = true
+	defer delete(st.hashes, h)
+	sb.WriteString("#<hash")
+	h.each(func(k, v Value) {
+		sb.WriteString(" (")
+		print(sb, k, write, transform, depth+1, st)
+		sb.WriteString(" . ")
+		print(sb, v, write, transform, depth+1, st)
+		sb.WriteByte(')')
+	})
+	sb.WriteByte('>')
+}
+
 // print writes v at the given nesting depth. Past MaxDepth it writes "..."
 // instead: a vector can hold itself (vector-set!), and printing it would
 // otherwise never end.
-func print(sb *strings.Builder, v Value, write bool, transform func(string) string, depth int) {
+func print(sb *strings.Builder, v Value, write bool, transform func(string) string, depth int, st *printState) {
 	if depth > MaxDepth {
 		sb.WriteString("...")
 		return
@@ -322,12 +356,12 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 				sb.WriteByte(' ')
 			}
 			first = false
-			print(sb, v.P.Car, write, transform, depth+1)
+			print(sb, v.P.Car, write, transform, depth+1, st)
 			v = v.P.Cdr
 		}
 		if v.Kind != KNil {
 			sb.WriteString(" . ")
-			print(sb, v, write, transform, depth+1)
+			print(sb, v, write, transform, depth+1, st)
 		}
 		sb.WriteByte(')')
 	case KProc:
@@ -346,9 +380,11 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 			if i > 0 {
 				sb.WriteByte(' ')
 			}
-			print(sb, el, write, transform, depth+1)
+			print(sb, el, write, transform, depth+1, st)
 		}
 		sb.WriteByte(')')
+	case KHash:
+		printHash(sb, v.Hash, write, transform, depth, st)
 	case KVoid:
 		sb.WriteString("#<void>")
 	default:
