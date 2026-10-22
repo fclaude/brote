@@ -216,9 +216,24 @@ required to register a primitive or run a program.
   say "SPEC", "L2" or "P6" refer to Nodwyn's design record, not to a Brote
   document.
 
-These are expected to move behind narrower interfaces once a second host
-shows which of them it uses. Until then they keep their Nodwyn behaviour, so
-that extracting Brote changed nothing for Nodwyn.
+A second host now shows which of them an embedder needs. Coigüe, a terminal
+editor, embeds Brote for its users' commands and uses `New`, `WithOutput`,
+`Register`, `SetGate` (to refuse what a command must not do), `Freeze`,
+`EvalString` and `Apply`, the `Prim`, `Meta`, `Param`, `Call` and `Value`
+types with their constructors, and `Denied`. It uses none of the groups above:
+no tools, provenance, credential handles, origin, halt or reload. Of the 91
+exported names, Nodwyn uses 78 and Coigüe 33 (counted by name in each
+program's non-test code), and 31 are common to both. So the API has two
+layers, and an embedder needs only the first:
+
+- **Core:** the interpreter and its lifecycle, values, primitives and `Call`,
+  errors, cancellation, `WithOutput`, `WithBaseDir`, `LoadFile`, and the gate
+  (`SetGate`, `Gate`, `Denied`) as the one place policy is applied.
+- **Provenance and presentation, Nodwyn's today:** the groups listed above.
+
+They keep their behaviour in v0.1.0, so that extracting Brote changed nothing
+for Nodwyn. Moving the second layer behind narrower interfaces would break
+Nodwyn's imports, so it waits for a minor version.
 
 ## What the tests check
 
