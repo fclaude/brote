@@ -1,7 +1,7 @@
 // Command brote is the standalone Brote Scheme interpreter: a REPL, a script
 // runner and an expression evaluator over the same interpreter a Go program
-// embeds. It has the language's builtins and nothing else: no host primitives
-// beyond `load`, no gate.
+// embeds. It has the language's builtins, `load`, and three host primitives
+// for scripts (command-line, read-file, read-line; host.go), and no gate.
 package main
 
 import (
@@ -19,7 +19,7 @@ import (
 	"github.com/fclaude/brote/scheme"
 )
 
-const usage = `usage: brote [-e EXPR | FILE...]
+const usage = `usage: brote [-e EXPR | FILE...] [-- ARG...]
        brote -version
 
 With no arguments brote reads Scheme from standard input and evaluates it,
@@ -29,7 +29,11 @@ session.
 
   FILE...     evaluate the files in order, in one interpreter
   -e EXPR     evaluate EXPR and print its value unless it is void
+  -- ARG...   arguments for the script: (command-line) returns them as strings
   -version    print the version
+
+A script can also (read-file path) into a string and (read-line) from standard
+input, which gives #f once there is no more; neither is there in the REPL.
 
 An error is written to standard error and ends the run with status 1.
 `
@@ -40,6 +44,7 @@ func main() {
 
 // run is main with its streams made explicit, so a test can drive it.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	args, scriptArgs := splitScriptArgs(args)
 	fs := flag.NewFlagSet("brote", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	expr := fs.String("e", "", "")
@@ -66,6 +71,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	in := scheme.New(scheme.WithOutput(stdout))
+	interactive := !given["e"] && len(files) == 0
+	if err := registerHost(in, scriptArgs, stdin, !interactive); err != nil {
+		fmt.Fprintf(stderr, "brote: %v\n", err)
+		return 1
+	}
 	ctx := context.Background()
 	switch {
 	case given["e"]:
