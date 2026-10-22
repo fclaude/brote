@@ -76,6 +76,11 @@ contract: lifecycle and ownership, values, writing host operations, errors,
 cancellation, gates. `go doc github.com/fclaude/brote/scheme` has runnable
 examples.
 
+The API has two layers. The core above is all an embedder needs; the rest
+(tool presentation, provenance tags, credential handles, origin, reload) is
+what Brote's first host, a coding agent, needed, and is marked as such in
+[What is Nodwyn's](docs/embedding.md#what-is-nodwyns).
+
 ## Documentation
 
 - [docs/scheme.md](docs/scheme.md): the language reference. A builtin that is
