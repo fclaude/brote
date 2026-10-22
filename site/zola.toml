@@ -1,0 +1,24 @@
+base_url = "https://fclaude.github.io/brote"
+title = "Brote"
+description = "A small Scheme for Go programs, and the brote command that runs it."
+default_language = "en"
+
+compile_sass = false
+build_search_index = false
+generate_feeds = false
+
+# The pages are the repository's own markdown, code samples included, and some
+# of them contain {{ }}; nothing here is a template.
+skip_content_templating = ["*", "**"]
+
+[markdown]
+smart_punctuation = false
+insert_anchor_links = "none"
+
+[markdown.highlighting]
+error_on_missing_language = true
+light_theme = "rose-pine-dawn"
+dark_theme = "rose-pine-moon"
+
+[extra]
+repo = "https://github.com/fclaude/brote"
