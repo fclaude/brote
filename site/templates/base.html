@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+  <meta name="description" content="{{ config.description }}">
+  <link rel="stylesheet" href="{{ get_url(path='style.css', cachebust=true) }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="{{ get_url(path='@/_index.md') }}">{{ config.title }}</a>
+    <nav>
+      {% set root = get_section(path="_index.md") -%}
+      {% for p in root.pages -%}
+      <a href="{{ p.permalink }}">{{ p.extra.nav }}</a>
+      {% endfor -%}
+      <a href="{{ config.extra.repo }}">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock content %}
+  </main>
+  <footer class="site-footer">
+    <a href="{{ config.extra.repo }}">{{ config.extra.repo }}</a>
+  </footer>
+</body>
+</html>
