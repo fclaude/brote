@@ -25,28 +25,13 @@ v, err := in.EvalString(ctx, src)                               // run source; v
 v, err = in.Apply(ctx, proc, args)                              // call a procedure value
 ```
 
-- **Ownership.** An `*Interp` has no locking. Use it from one goroutine at a
-  time: two goroutines evaluating in the same interpreter race on its
-  environment (the race detector reports it; without it, Go's runtime can end
-  the process with `concurrent map writes`). A host that receives work on many
-  goroutines funnels it to one that owns the interpreter, or holds a mutex
-  around every call. A handler may call back into the interpreter that called
-  it, on the same goroutine (`Call.In.Apply(Call.Ctx, …)`), as `map` and
-  `register-tool` do.
-- **Separate interpreters share nothing.** There is no package-level state, so
-  a host may run any number of them, each in its own goroutine.
-- **Programs outlive evaluations.** Definitions stay in the global
-  environment (`in.Global()`), and a closure value keeps its environment.
-  A host can look one up (`in.Global().Lookup("on-save")`), keep the `Value`,
-  and `Apply` it later with arguments it builds. `Global().Snapshot()` and
-  `Restore` copy the bindings and put them back.
-- **Registration is open until `Freeze`.** Names are unique for the life of
-  the interpreter: a builtin cannot be shadowed and a primitive cannot be
-  registered twice. After `Freeze`, `Register` and `(register-tool …)` fail.
-  Use it to fix the set of operations before running code you did not write.
-  `BeginReload`/`EndReload` re-run a program file over a frozen interpreter:
-  `register-tool` replaces the body of a tool whose name and declaration are
-  unchanged, and notes any other registration instead of applying it.
+An `*Interp` has no locking, so use it from one goroutine at a time. Two goroutines evaluating in the same interpreter race on its environment (the race detector reports it, and without it Go's runtime can end the process with `concurrent map writes`). A host that receives work on many goroutines funnels it to one that owns the interpreter, or holds a mutex around every call. A handler may call back into the interpreter that called it, on the same goroutine (`Call.In.Apply(Call.Ctx, …)`), as `map` and `register-tool` do.
+
+Separate interpreters share nothing. There is no package-level state, so a host may run any number of them, each in its own goroutine.
+
+Programs outlive evaluations. Definitions stay in the global environment (`in.Global()`), and a closure value keeps its environment. A host can look one up (`in.Global().Lookup("on-save")`), keep the `Value`, and `Apply` it later with arguments it builds. `Global().Snapshot()` and `Restore` copy the bindings and put them back.
+
+Registration is open until `Freeze`. Names are unique for the life of the interpreter: a builtin can't be shadowed and a primitive can't be registered twice. After `Freeze`, `Register` and `(register-tool …)` fail, so use it to fix the set of operations before running code you didn't write. `BeginReload`/`EndReload` re-run a program file over a frozen interpreter: `register-tool` replaces the body of a tool whose name and declaration are unchanged, and notes any other registration instead of applying it.
 
 ## Values
 
@@ -61,6 +46,7 @@ holds the payload:
 | `KString` `KSymbol` | `S` | `scheme.Str(s)`, `scheme.Sym(s)` |
 | `KPair` | `P.Car`, `P.Cdr` | `scheme.Cons(a, d)`, `scheme.List(vs...)` |
 | `KVec` | `V.Items` | `scheme.Vec(vs...)` |
+| `KHash` | `Hash` | `scheme.NewHash()`; fill it from Scheme with `hash-set!` |
 | `KProc` `KPrim` | `Proc`, `Prim` | a program's `lambda`; `Register` |
 | `KHandle` | `H` | `scheme.HandleValue(&scheme.Handle{...})` |
 
@@ -69,7 +55,11 @@ readable form (strings quoted), `scheme.Display(v)` the human form. Strings
 are UTF-8, immutable, and indexed by rune. `scheme.FromJSON` and `ToJSON`
 convert JSON text and values (`scheme.md` §5 has the mapping).
 
+A hash table is a pointer to shared storage, like a vector. Its entries stay in the order they were added, and a Go host reads them by evaluating `hash->alist` (or `hash-keys`) and walking the list. `DeepTaint` follows keys and values.
+
 Source is read with `scheme.Read` (every top-level form) or `ReadOne`.
+
+The `brote` command registers three more procedures for scripts, `command-line`, `read-file` and `read-line`. They're part of the command (`cmd/brote/host.go`), so an interpreter you create with `scheme.New` doesn't have them. See the [command page](command.md) for what they do.
 
 ## Host operations
 
@@ -111,7 +101,7 @@ in.Register(&scheme.Prim{
   `guard` in the program can catch it.
 - A handler receives the evaluation's `Ctx`. A handler that blocks (waits for
   a person, a network reply, a subprocess) honours it, since cancellation
-  only stops Scheme between steps, not a Go call in progress.
+  only stops Scheme between steps, and it can't interrupt a Go call that's already running.
 - The result of a handler is tagged with whatever provenance the primitive
   declares (`Meta.TaintSource`) and its arguments carry (`scheme.md` §5).
 
@@ -212,9 +202,8 @@ required to register a primitive or run a program.
   constants and `Handle`: provenance and credential handles. The builtins
   `taint-of`, `tainted?`, `wipe` and `handle?` exist for them.
 - `Origin`, `Halt`, `BeginReload`/`EndReload`, `Freeze`.
-- Some error and doc strings cite Nodwyn's ADRs ("ADR 9"); the comments that
-  say "SPEC", "L2" or "P6" refer to Nodwyn's design record, not to a Brote
-  document.
+- Some error and doc strings cite design decisions from the agent Brote came out of, and
+  the comments that say "SPEC", "L2" or "P6" refer to that agent's design record. None of that is a Brote document.
 
 A second host now shows which of them an embedder needs. Coigüe, a terminal
 editor, embeds Brote for its users' commands and uses `New`, `WithOutput`,
@@ -224,12 +213,7 @@ types with their constructors, and `Denied`. It uses none of the groups above:
 no tools, provenance, credential handles, origin, halt or reload. Of the 91
 exported names, Nodwyn uses 78 and Coigüe 33 (counted by name in each
 program's non-test code), and 31 are common to both. So the API has two
-layers, and an embedder needs only the first:
-
-- **Core:** the interpreter and its lifecycle, values, primitives and `Call`,
-  errors, cancellation, `WithOutput`, `WithBaseDir`, `LoadFile`, and the gate
-  (`SetGate`, `Gate`, `Denied`) as the one place policy is applied.
-- **Provenance and presentation, Nodwyn's today:** the groups listed above.
+layers, and an embedder needs only the first. The first layer is the interpreter and its lifecycle, values, primitives and `Call`, errors, cancellation, `WithOutput`, `WithBaseDir`, `LoadFile`, and the gate (`SetGate`, `Gate`, `Denied`) as the one place policy is applied. The second is the groups listed above, which Nodwyn uses today.
 
 They keep their behaviour in v0.1.0, so that extracting Brote changed nothing
 for Nodwyn. Moving the second layer behind narrower interfaces would break
