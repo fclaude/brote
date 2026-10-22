@@ -106,3 +106,52 @@ func TestVersion(t *testing.T) {
 		t.Fatalf("status %d, stdout %q", status, out)
 	}
 }
+
+func TestCommandLineIsWhatFollowsTheDashes(t *testing.T) {
+	status, out, errs := invoke(t, "", "-e", `(command-line)`, "--", "a", "b c")
+	if status != 0 || out != "(\"a\" \"b c\")\n" || errs != "" {
+		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
+	}
+	// The script's arguments are not the command's own: a flag after the dashes is data.
+	status, out, _ = invoke(t, "", "-e", `(command-line)`, "--", "-version")
+	if status != 0 || out != "(\"-version\")\n" {
+		t.Fatalf("status %d, stdout %q", status, out)
+	}
+	status, out, _ = invoke(t, "", "-e", `(command-line)`)
+	if status != 0 || out != "()\n" {
+		t.Fatalf("no arguments: status %d, stdout %q", status, out)
+	}
+}
+
+func TestReadFileGivesTheContentsAndNamesAFileItCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "in.txt", "line one\nline two\n")
+	status, out, errs := invoke(t, "", "-e", `(read-file "`+p+`")`)
+	if status != 0 || out != "\"line one\\nline two\\n\"\n" || errs != "" {
+		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
+	}
+	status, _, errs = invoke(t, "", "-e", `(read-file "`+filepath.Join(dir, "missing")+`")`)
+	if status != 1 || !strings.Contains(errs, "missing") || strings.Count(errs, "read-file") > 1 {
+		t.Fatalf("status %d, stderr %q", status, errs)
+	}
+}
+
+func TestReadLineTakesStandardInputLineByLineThenFalse(t *testing.T) {
+	status, out, errs := invoke(t, "one\ntwo\r\nthree", "-e", `(list (read-line) (read-line) (read-line) (read-line))`)
+	if status != 0 || out != "(\"one\" \"two\" \"three\" #f)\n" || errs != "" {
+		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
+	}
+	status, out, _ = invoke(t, "", "-e", `(read-line)`)
+	if status != 0 || out != "#f\n" {
+		t.Fatalf("empty input: status %d, stdout %q", status, out)
+	}
+}
+
+// The REPL reads standard input itself, so a script's read-line would take
+// lines from under it: there is none there, and the other two still are.
+func TestTheReplHasNoReadLineButHasTheOthers(t *testing.T) {
+	status, out, errs := invoke(t, "(command-line)\n(read-line)\n", "--", "x")
+	if status != 0 || !strings.Contains(out, `("x")`) || !strings.Contains(errs+out, "read-line") {
+		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
+	}
+}

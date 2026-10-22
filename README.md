@@ -35,14 +35,20 @@ Go 1.26 or newer.
 brote                 # a REPL on standard input (prompts and Ctrl-C when it is a terminal)
 brote FILE...         # run files, in order, in one interpreter
 brote -e '(+ 1 2)'    # evaluate an expression and print its value
+brote FILE -- a b     # what follows -- is for the script: (command-line) gives ("a" "b")
 brote -version
 ```
 
-`brote` has the language's builtins and `load`, and no other way to reach the
-machine: it cannot read a file into a string, run a program or open a socket.
-It is for trying the language, running pure programs, and checking what a host
-would run. An error goes to standard error and ends a file or `-e` run with
-status 1. There is no line editing; `rlwrap brote` adds it.
+`brote` has the language's builtins and `load`, and three primitives for a
+script that needs something of the machine: `(command-line)` is the arguments
+after `--` as a list of strings, `(read-file path)` is a file's contents as a
+string, and `(read-line)` is the next line of standard input without its line
+ending, or `#f` once there is no more (it is not there in the REPL, which reads
+standard input itself). They belong to the command: the `scheme` package an
+embedding program imports has no host. `brote` still cannot run a program or
+open a socket. It is for trying the language, running small programs, and
+checking what a host would run. An error goes to standard error and ends a file
+or `-e` run with status 1. There is no line editing; `rlwrap brote` adds it.
 
 ## Embedding
 
