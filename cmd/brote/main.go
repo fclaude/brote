@@ -12,11 +12,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime/debug"
-	"strings"
 
 	"github.com/fclaude/brote/repl"
 	"github.com/fclaude/brote/scheme"
+	buildversion "github.com/fclaude/brote/version"
 )
 
 const usage = `usage: brote [-e EXPR | FILE...] [-- ARG...]
@@ -62,7 +61,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	if *showVersion {
-		fmt.Fprintln(stdout, "brote", version())
+		fmt.Fprintln(stdout, buildversion.Line("brote"))
 		return 0
 	}
 	if given["e"] && len(files) > 0 {
@@ -120,37 +119,4 @@ func isTerminal(r io.Reader) bool {
 	}
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
-}
-
-// version is the module version the binary was built from, with the commit
-// when the build recorded one.
-func version() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "(unknown)"
-	}
-	v := info.Main.Version
-	if v == "" {
-		v = "(devel)"
-	}
-	var rev, dirty string
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			if s.Value == "true" {
-				dirty = "+dirty"
-			}
-		}
-	}
-	if len(rev) > 12 {
-		rev = rev[:12]
-	}
-	// A pseudo-version already holds the commit and +dirty; a release tag or
-	// "(devel)" does not.
-	if rev != "" && !strings.Contains(v, rev) {
-		v += " (" + rev + dirty + ")"
-	}
-	return v
 }

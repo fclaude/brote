@@ -1,0 +1,60 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to release
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+      - name: Validate and build the selected tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git show-ref --verify "refs/tags/$TAG"
+          cp scripts/release.sh "$RUNNER_TEMP/brote-release.sh"
+          sha=$(git rev-parse "$TAG^{commit}")
+          git checkout --detach "$sha"
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -race -count=1 ./...
+          if [ -f version/version.go ]; then
+            source=$(sed -n 's/^[[:space:]]*Version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' version/version.go)
+            test "$source" = "${TAG#v}"
+          fi
+          bash "$RUNNER_TEMP/brote-release.sh" "${TAG#v}" "$sha" dist
+      - name: Publish release archives and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          printf 'Brote %s. Portable archives include the interpreter, LICENSE, and brote-lsp when present at this tag. SHA256SUMS records archive checksums.\n' "${TAG#v}" > "$RUNNER_TEMP/notes.txt"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Brote ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.txt" dist/*
+          fi

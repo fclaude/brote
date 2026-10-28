@@ -1,0 +1,119 @@
+package analysis
+
+import (
+	"strings"
+	"testing"
+)
+
+func pos(d *Document, fragment string, occurrence int) Position {
+	at := 0
+	for i := 0; i <= occurrence; i++ {
+		n := strings.Index(d.Text[at:], fragment)
+		if n < 0 {
+			panic(fragment)
+		}
+		at += n
+		if i < occurrence {
+			at += len(fragment)
+		}
+	}
+	return d.Position(at)
+}
+func TestLexicalScopes(t *testing.T) {
+	d := Analyze("(define x 1)\n(define (f x) (+ x 2))\n(f x)", Profile{})
+	if len(d.Diagnostics) != 0 {
+		t.Fatal(d.Diagnostics)
+	}
+	outer := d.DefinitionAt(pos(d, "x", 0))
+	inner := d.DefinitionAt(pos(d, "x", 1))
+	if outer == nil || inner == nil || outer == inner {
+		t.Fatal("shadowing lost")
+	}
+	if d.DefinitionAt(pos(d, "x", 2)) != inner || d.DefinitionAt(pos(d, "x", 3)) != outer {
+		t.Fatal("wrong scope")
+	}
+	if got := len(d.ReferencesAt(pos(d, "x", 0), false)); got != 1 {
+		t.Fatal(got)
+	}
+	if got := len(d.ReferencesAt(pos(d, "f x", 1), true)); got != 2 {
+		t.Fatal(got)
+	}
+}
+func TestLetScopesAndRecursion(t *testing.T) {
+	for _, kind := range []string{"let", "let*", "letrec"} {
+		d := Analyze("(define x 0) ("+kind+" ((x x) (y x)) (+ x y))", Profile{})
+		outer := d.DefinitionAt(pos(d, "x", 0))
+		binding := d.DefinitionAt(pos(d, "x", 1))
+		first := d.DefinitionAt(pos(d, "x", 2))
+		second := d.DefinitionAt(pos(d, "x", 3))
+		if kind == "letrec" && first != binding || kind != "letrec" && first != outer {
+			t.Fatal(kind, "initializer")
+		}
+		if kind == "let" && second != outer || kind != "let" && second != binding {
+			t.Fatal(kind, "second initializer")
+		}
+	}
+	d := Analyze("(define (even n) (odd n)) (define (odd n) (even n))", Profile{})
+	if d.DefinitionAt(pos(d, "odd", 0)) == nil {
+		t.Fatal("forward definition lost")
+	}
+}
+func TestQuotationCommentsAndIncomplete(t *testing.T) {
+	d := Analyze("(define x 1) ; x\n'(x) `(x ,x) #| x |# #(x) (define (f y) (+ y", Profile{})
+	if len(d.Diagnostics) != 1 {
+		t.Fatal(d.Diagnostics)
+	}
+	if got := len(d.ReferencesAt(pos(d, "x", 0), false)); got != 1 {
+		t.Fatalf("quoted names became references: %d", got)
+	}
+	if d.DefinitionAt(pos(d, "y", 1)) == nil {
+		t.Fatal("incomplete form lost scope")
+	}
+	d = Analyze("(define s \"😀\") (define x 1) x", Profile{})
+	p := pos(d, "x", 1)
+	if p.Character != 29 {
+		t.Fatalf("UTF16 position: %+v", p)
+	}
+	if d.DefinitionAt(p) == nil {
+		t.Fatal("UTF16 reference lost")
+	}
+}
+func TestHostProfileAndNoExecution(t *testing.T) {
+	d := Analyze("(write-file \"/must-not-exist\" \"anything\") (editor-message \"hi\")", Profile{Symbols: []Symbol{{Name: "editor-message", Doc: "Show a message", Parameters: []string{"text"}}}})
+	if got := d.Hover(pos(d, "editor-message", 0)); !strings.Contains(got, "Show a message") {
+		t.Fatal(got)
+	}
+	if got := d.Hover(pos(d, "write-file", 0)); got != "" {
+		t.Fatal("unexpected builtin")
+	}
+	if len(d.Completions(Position{})) == 0 {
+		t.Fatal("no builtins")
+	}
+}
+
+func TestDoAndGuardBindings(t *testing.T) {
+	d := Analyze("(do ((i 0 (+ i 1))) ((= i 5) i)) (guard (err (else err)) (+ 1 2))", Profile{})
+	if d.DefinitionAt(pos(d, "i", 0)) != d.DefinitionAt(pos(d, "i", 2)) {
+		t.Fatal("do scope")
+	}
+	if d.DefinitionAt(pos(d, "err", 0)) != d.DefinitionAt(pos(d, "err", 1)) {
+		t.Fatal("guard scope")
+	}
+}
+
+func FuzzAnalyze(f *testing.F) {
+	for _, s := range []string{"(do ((i", "(let ((x", "(guard (e", "(define (f . args) args)", "(define x 1) `(,x x)", "(lambda (x) x)"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if len(s) > 4096 {
+			t.Skip()
+		}
+		d := Analyze(s, Profile{})
+		for _, def := range d.Definitions {
+			if before(def.Range.End, def.Range.Start) {
+				t.Fatal(def)
+			}
+		}
+	})
+}

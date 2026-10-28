@@ -3,6 +3,7 @@ check: lint test
 
 build:
 	go build -o bin/brote ./cmd/brote
+	go build -o bin/brote-lsp ./cmd/brote-lsp
 
 lint:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }

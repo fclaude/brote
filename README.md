@@ -76,3 +76,10 @@ Brote is pre-1.0 and its API may change. Its first host was my coding agent, Nod
 ## Licence
 
 [MIT](LICENSE).
+
+## Language server
+
+`brote-lsp` provides static Scheme diagnostics, lexical navigation, builtin hover
+and completion over stdio. Embedding hosts supply generated API metadata without
+forking the server. See [language server](docs/language-server.md) for setup, the
+host-profile format, and current limits.
