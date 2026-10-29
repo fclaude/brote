@@ -139,7 +139,7 @@ already does.
 | `(do ((v init [step]) …) (test [e …]) cmd …)` | loop: check `test`; on false evaluate the `cmd`s, then the `step`s (in parallel), rebind, repeat. Value is the test clause's last `e` (void if none). A Go loop, so constant stack |
 | `(when test e …)` | `e …` only if `test` is true; yields void otherwise |
 | `(unless test e …)` | `e …` only if `test` is false; yields void otherwise |
-| `(guard (var clause …) body …)` | evaluate `body …`; if it raises a Scheme error, bind `var` to the condition (an alist `((message . "text") (irritants …))`) and try the clauses like `cond` (`(test body …)`, `(test => proc)`, `(else …)`). The first true clause's value is the value of `guard`; no match re-raises. A guard **denial** and a **cancellation** are never catchable |
+| `(guard (var clause …) body …)` | evaluate `body …`; if it raises a Scheme error, bind `var` to the condition (an alist `((message . "text") (irritants …) (where . "file:line:col") (trace "in f (file:line:col)" …))`; the last two are there when the failing form was read from text) and try the clauses like `cond` (`(test body …)`, `(test => proc)`, `(else …)`). The first true clause's value is the value of `guard`; no match re-raises. A guard **denial** and a **cancellation** are never catchable |
 | `(with-output-to-string e …)` | evaluate `e …` with `display`/`write`/`newline` captured; return the captured text (a minimal string port) |
 | `(begin e …)` | evaluate in order, yield the last |
 | `(set! name expr)` | assign an **existing** binding; error if unbound |
@@ -170,6 +170,24 @@ Errors may be caught with `guard` (§3):
 
 An error not caught by any clause unwinds to the host, which reports it (the
 REPL prints it; `brote FILE` prints it and exits 1).
+
+An error says where it happened. The reader remembers the line and column of
+every list it reads, and the error carries the position of the innermost list
+that was being evaluated when it was raised, then the procedures it left,
+innermost first. The `brote` command prints them:
+
+```text
+fail.scm:3:8: car: argument 1: expected pair, got integer 5
+  in run (fail.scm:3:3)
+```
+
+A procedure that finished with a tail call is not on the list, because it is no
+longer running. The list keeps the sixteen innermost procedures and counts the
+rest, so a runaway recursion does not make an error the size of the recursion.
+An error raised inside the prelude or a standard-library module is reported at
+the call in your program that led to it, and those procedures are left out of
+the list. A `guard` condition has the same facts as `where` and `trace`
+(§3), and the Go types are in [embedding.md](embedding.md#errors).
 
 Three things pass through `guard` untouched, so that a program cannot hide
 that it was stopped: a primitive the gate **denies** (it raises
@@ -587,7 +605,6 @@ primitive, writing a gate) is in [embedding.md](embedding.md).
 Deliberately absent.
 
 - characters and the full string-port API (only `with-output-to-string`)
-- source positions in runtime errors (reader errors carry positions)
 - `define-macro`, which the prelude does not need
 - `set-car!` / `set-cdr!` and string mutation
 - nested quasiquote

@@ -22,8 +22,21 @@ type ParseError struct {
 func (e *ParseError) Error() string { return fmt.Sprintf("%d:%d: %s", e.Line, e.Col, e.Msg) }
 
 // Read parses every top-level datum in src.
-func Read(src string) ([]Value, error) {
-	r := &reader{src: src, line: 1, col: 1}
+func Read(src string) ([]Value, error) { return ReadNamed("", src) }
+
+// ReadNamed is Read for text that came from the file or other source called
+// name. Each list it reads remembers its line and column under that name, so
+// an error raised while evaluating the list says where it is.
+func ReadNamed(name, src string) ([]Value, error) {
+	var file *Source
+	if name != "" {
+		file = &Source{Name: name}
+	}
+	return readSource(file, src)
+}
+
+func readSource(file *Source, src string) ([]Value, error) {
+	r := &reader{src: src, line: 1, col: 1, file: file}
 	var out []Value
 	for {
 		r.skipSpace()
@@ -55,6 +68,7 @@ func ReadOne(src string) (Value, error) {
 
 type reader struct {
 	src          string
+	file         *Source // what Pos records; nil for text with no name
 	pos          int
 	line, col    int
 	unterminated bool // an open #| comment ran to EOF
@@ -153,25 +167,33 @@ func (r *reader) datum() (Value, error) {
 	c := r.peek()
 	switch c {
 	case '(':
+		pos := r.pos0()
 		r.next()
-		return r.list()
+		v, err := r.list()
+		if err == nil && v.Kind == KPair {
+			v.P.loc = pos
+		}
+		return v, err
 	case ')':
 		return Value{}, r.errf("unexpected )")
 	case '[', ']', '{', '}':
 		return Value{}, r.errf("%c is not valid syntax (only parentheses delimit lists)", c)
 	case '\'':
+		pos := r.pos0()
 		r.next()
-		return r.abbrev("quote")
+		return r.abbrev("quote", pos)
 	case '`':
+		pos := r.pos0()
 		r.next()
-		return r.abbrev("quasiquote")
+		return r.abbrev("quasiquote", pos)
 	case ',':
+		pos := r.pos0()
 		r.next()
 		if r.peek() == '@' {
 			r.next()
-			return r.abbrev("unquote-splicing")
+			return r.abbrev("unquote-splicing", pos)
 		}
-		return r.abbrev("unquote")
+		return r.abbrev("unquote", pos)
 	case '"':
 		if r.startsWith(`"""`) {
 			return r.rawString()
@@ -211,13 +233,18 @@ func (r *reader) vector() (Value, error) {
 	return Vec(items...), nil
 }
 
-func (r *reader) abbrev(name string) (Value, error) {
+func (r *reader) abbrev(name string, pos *Pos) (Value, error) {
 	d, err := r.datum()
 	if err != nil {
 		return Value{}, err
 	}
-	return List(Sym(name), d), nil
+	v := List(Sym(name), d)
+	v.P.loc = pos
+	return v, nil
 }
+
+// pos0 is the reader's current position, as a Pos.
+func (r *reader) pos0() *Pos { return &Pos{Source: r.file, Line: r.line, Col: r.col} }
 
 func (r *reader) list() (Value, error) {
 	var items []Value

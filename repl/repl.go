@@ -46,7 +46,7 @@ func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Opt
 			pending.WriteByte('\n')
 		}
 		pending.WriteString(sc.Text())
-		forms, err := scheme.Read(pending.String())
+		forms, err := scheme.ReadNamed("<repl>", pending.String())
 		if errors.Is(err, scheme.ErrIncomplete) {
 			show(o.Continue)
 			continue
@@ -64,7 +64,7 @@ func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Opt
 		for _, f := range forms {
 			v, err := in.Eval(evalCtx, f, in.Global())
 			if err != nil {
-				fmt.Fprintf(w, "error: %v\n", err)
+				fmt.Fprintf(w, "error: %s\n", Describe(err))
 				break
 			}
 			if v.Kind != scheme.KVoid {
@@ -78,4 +78,16 @@ func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Opt
 		fmt.Fprintln(w)
 	}
 	return sc.Err()
+}
+
+// Describe is err as the loop writes it, and as the command writes the error
+// of -e. A one-line form that failed in itself needs no position (it is the
+// line just typed); one that failed inside a procedure, or on a later line,
+// says where.
+func Describe(err error) string {
+	var se *scheme.Error
+	if errors.As(err, &se) && se.Pos != nil && se.Pos.Line == 1 && len(se.Trace) == 0 {
+		return err.Error()
+	}
+	return scheme.FormatError(err)
 }

@@ -126,9 +126,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	switch {
 	case given["e"]:
-		v, err := in.EvalString(ctx, *expr)
+		v, err := in.EvalNamed(ctx, "<expr>", *expr)
 		if err != nil {
-			fmt.Fprintf(stderr, "brote: %v\n", err)
+			fmt.Fprintf(stderr, "brote: %s\n", repl.Describe(err))
 			return 1
 		}
 		if v.Kind != scheme.KVoid {
@@ -137,7 +137,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case len(files) > 0:
 		for _, path := range files {
 			if err := in.LoadFile(ctx, path); err != nil {
-				fmt.Fprintf(stderr, "brote: %v\n", err)
+				fmt.Fprintf(stderr, "brote: %s\n", scheme.FormatError(err))
 				return 1
 			}
 		}

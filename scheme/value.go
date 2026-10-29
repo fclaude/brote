@@ -138,6 +138,11 @@ func (v *Vector) Elements() []Value {
 type Pair struct {
 	Car, Cdr Value
 
+	// loc is where the reader found the list this pair begins; nil for a
+	// pair the program built. It is set before the pair is shared and never
+	// changes.
+	loc *Pos
+
 	// args is Cdr as a slice, kept by the evaluator for a pair that is code.
 	// Pairs are immutable, so it never goes stale.
 	args atomic.Pointer[argList]

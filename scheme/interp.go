@@ -167,7 +167,7 @@ func (in *Interp) loadPrelude() error {
 		if err != nil {
 			return err
 		}
-		if _, err := in.EvalString(context.Background(), string(src)); err != nil {
+		if _, err := in.EvalLibrary(context.Background(), "prelude/"+n, string(src)); err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
 	}
@@ -180,7 +180,29 @@ func (in *Interp) Global() *Env { return in.global }
 // EvalString reads and evaluates every form in src in the global
 // environment and returns the last value (Void for empty input).
 func (in *Interp) EvalString(ctx context.Context, src string) (Value, error) {
-	forms, err := Read(src)
+	return in.EvalNamed(ctx, "", src)
+}
+
+// EvalNamed is EvalString for text that came from the file or other source
+// called name, which is what an error raised in it says it was in.
+func (in *Interp) EvalNamed(ctx context.Context, name, src string) (Value, error) {
+	var file *Source
+	if name != "" {
+		file = &Source{Name: name}
+	}
+	return in.evalSource(ctx, file, src)
+}
+
+// EvalLibrary is EvalNamed for Scheme that is part of the host and not of the
+// script, such as the Scheme half of a module. An error raised inside it is
+// reported where the script called it, and the procedures defined in it do not
+// appear in a trace.
+func (in *Interp) EvalLibrary(ctx context.Context, name, src string) (Value, error) {
+	return in.evalSource(ctx, &Source{Name: name, Library: true}, src)
+}
+
+func (in *Interp) evalSource(ctx context.Context, file *Source, src string) (Value, error) {
+	forms, err := readSource(file, src)
 	if err != nil {
 		return Value{}, err
 	}
@@ -228,7 +250,7 @@ func (in *Interp) LoadFile(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := in.EvalString(ctx, string(src)); err != nil {
+	if _, err := in.EvalNamed(ctx, path, string(src)); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
@@ -261,21 +283,26 @@ func (in *Interp) apply(t *task, ctx context.Context, f Value, args []Value) (Va
 		if err != nil {
 			return Value{}, err
 		}
-		return in.evalBody(t, ctx, f.Proc.Body, env)
+		return in.evalBody(t, ctx, f.Proc, env)
 	default:
 		return Value{}, errorf("apply", "not a procedure: %s", Write(f))
 	}
 }
 
-// evalBody evaluates a sequence, the last expression in tail position of
+// evalBody evaluates the body of fn, the last expression in tail position of
 // this Go frame.
-func (in *Interp) evalBody(t *task, ctx context.Context, body []Value, env *Env) (Value, error) {
+func (in *Interp) evalBody(t *task, ctx context.Context, fn *Closure, env *Env) (Value, error) {
+	return in.evalSeq(t, ctx, fn.Body, env, fn)
+}
+
+// evalSeq evaluates a sequence, in fn's body if fn is not nil.
+func (in *Interp) evalSeq(t *task, ctx context.Context, body []Value, env *Env, fn *Closure) (Value, error) {
 	for i := 0; i < len(body)-1; i++ {
-		if _, err := in.eval(t, ctx, body[i], env); err != nil {
+		if _, err := in.evalIn(t, ctx, body[i], env, fn); err != nil {
 			return Value{}, err
 		}
 	}
-	return in.eval(t, ctx, body[len(body)-1], env)
+	return in.evalIn(t, ctx, body[len(body)-1], env, fn)
 }
 
 func bindParams(c *Closure, args []Value) (*Env, error) {
@@ -318,11 +345,24 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 }
 
 func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, error) {
+	return in.evalIn(t, ctx, x, env, nil)
+}
+
+// evalIn is eval for x as part of the body of fn, or of no procedure if fn is
+// nil. When x fails it tells the error where and, for a procedure, which: the
+// form being evaluated when the loop below gave up is the one that failed.
+func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Closure) (v Value, err error) {
+	var at *Pos // the last call in the script that the loop below followed into a procedure
 	if t.depth++; t.depth > t.limit {
 		t.depth--
 		return Value{}, errorf("eval", "recursion too deep: more than %d nested evaluations", t.limit)
 	}
-	defer t.leave()
+	defer func() {
+		t.leave()
+		if err != nil {
+			err = annotate(err, x, fn, at)
+		}
+	}()
 	for {
 		switch x.Kind {
 		case KSymbol:
@@ -557,8 +597,12 @@ func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, 
 				return Value{}, err
 			}
 			body := f.Proc.Body
+			if loc := x.P.loc; loc != nil && !loc.isLibrary() {
+				at = loc
+			}
+			fn = f.Proc
 			for i := 0; i < len(body)-1; i++ {
-				if _, err := in.eval(t, ctx, body[i], nenv); err != nil {
+				if _, err := in.evalIn(t, ctx, body[i], nenv, fn); err != nil {
 					return Value{}, err
 				}
 			}

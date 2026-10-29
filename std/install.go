@@ -129,7 +129,7 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 		if err != nil {
 			continue
 		}
-		if _, err := in.EvalString(context.Background(), string(src)); err != nil {
+		if _, err := in.EvalLibrary(context.Background(), "std/"+m+".scm", string(src)); err != nil {
 			s.close()
 			return nil, fmt.Errorf("std: prelude %s: %w", m, err)
 		}

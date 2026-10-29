@@ -125,6 +125,20 @@ catches errors from `Apply` itself (to try the next file, say) should use it
 so as not to swallow a cancellation. Errors from a file loaded with `LoadFile`
 carry the path in front.
 
+A `*scheme.Error` also says where it was raised: `Pos` is the line and column
+of the form that failed (`Pos.String()` is `file:line:col`), `Trace` the
+procedures it left, innermost first, and `Elided` how many more there were than
+the sixteen `Trace` keeps. `Error()` is unchanged, so a host that matches on the
+text keeps working; `scheme.FormatError(err)` writes the position, the message and
+the trace for a person, and is what the `brote` command prints. `Pos` is nil for
+a form the program built rather than read.
+
+Text read with `EvalString` or `Read` has line and column but no file name. To
+have positions name a file, evaluate with `EvalNamed(ctx, name, src)` (which
+`LoadFile` does) or read with `ReadNamed(name, src)`. `EvalLibrary(ctx, name, src)`
+is `EvalNamed` for Scheme that is part of the host and not of the script, as in
+a module of `std`: an error raised in it is reported at the script's call of it.
+
 ## Tasks
 
 `scheme.WithTasks(scheme.TaskLimits{MaxTasks: 64, MaxDepth: 2000})` gives scripts `spawn`, channels, `select`, `pmap` and the rest ([the language reference](scheme.md) lists them). Without it those names are unbound and nothing here applies. The `brote` command turns tasks on.

@@ -92,6 +92,20 @@ $ printf 'first\nsecond\n' | brote shout.scm
 1 SECOND
 ```
 
+## When a script fails
+
+An error in a file says where it happened, and which procedures it was in:
+
+<!-- run-shell -->
+```console
+$ printf '(define (half x) (/ x 2))\n(define (run x)\n  (+ 1 (car (half x))))\n(run 10)\n' > fail.scm
+$ brote fail.scm
+brote: fail.scm:3:8: car: argument 1: expected pair, got integer 5
+  in run (fail.scm:3:3)
+```
+
+The first line is the position of the form that failed, then the message. Each line after it is a procedure the error left, innermost first, with the place in it where evaluation was. A procedure that ended in a tail call is not listed. The REPL gives the same when a form fails inside a procedure.
+
 A file that doesn't exist is an error like any other:
 
 <!-- run-shell -->

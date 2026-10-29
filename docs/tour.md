@@ -218,6 +218,8 @@ error: something broke: 42
 0
 ```
 
+When the failing form was read from a file, the association list also has `where`, the line and column, and `trace`, the procedures the error passed through. The [command page](command.md#when-a-script-fails) shows what the `brote` command prints for one.
+
 ## A table of counts
 
 Hash tables map keys (strings, symbols, integers and booleans) to values. Here's one counting the words in a sentence:

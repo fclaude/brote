@@ -120,7 +120,7 @@ func (in *Interp) evalGuard(t *task, ctx context.Context, form []Value, env *Env
 	clauses := spec[1:]
 	body := form[1:]
 
-	last, err := in.evalBody(t, ctx, body, env)
+	last, err := in.evalSeq(t, ctx, body, env, nil)
 	if err == nil {
 		return last, nil
 	}
@@ -131,10 +131,7 @@ func (in *Interp) evalGuard(t *task, ctx context.Context, form []Value, env *Env
 	if !errors.As(err, &se) {
 		return Value{}, err
 	}
-	cond := List(
-		Cons(Sym("message"), Value{Kind: KString, S: se.Message, Taint: se.Taint}),
-		Cons(Sym("irritants"), List(se.Irritants...)),
-	)
+	cond := conditionOf(se)
 	henv := NewEnv(env)
 	henv.Define(varName, cond)
 	result, cerr := in.condClauses(t, ctx, clauses, henv)
@@ -148,6 +145,35 @@ func (in *Interp) evalGuard(t *task, ctx context.Context, form []Value, env *Env
 		return result.value, nil
 	}
 	return in.eval(t, ctx, result.next, henv)
+}
+
+// conditionOf is the alist guard hands a clause for se. A condition that knows
+// where it was raised also has (where . "file:line:col") and (trace "in f
+// (file:line:col)" …), the procedures it left, innermost first.
+func conditionOf(se *Error) Value {
+	fields := []Value{
+		Cons(Sym("message"), Value{Kind: KString, S: se.Message, Taint: se.Taint}),
+		Cons(Sym("irritants"), List(se.Irritants...)),
+	}
+	if se.Pos != nil {
+		fields = append(fields, Cons(Sym("where"), Str(se.Pos.String())))
+		trace := make([]Value, len(se.Trace))
+		for i, f := range se.Trace {
+			trace[i] = Str(frameText(f))
+		}
+		fields = append(fields, Cons(Sym("trace"), List(trace...)))
+	}
+	return List(fields...)
+}
+
+// frameText is "in name (file:line:col)", with "lambda" for a procedure that
+// has no name.
+func frameText(f Frame) string {
+	name := f.Proc
+	if name == "" {
+		name = "lambda"
+	}
+	return "in " + name + " (" + f.Pos.String() + ")"
 }
 
 // Catchable reports whether a Scheme program may handle err. A denial, a
