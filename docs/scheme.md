@@ -93,8 +93,8 @@ already does.
 | port | `#<input-port>` `#<output-port>` | `port?` | where text is read from or written to; see Ports |
 | end-of-file object | `#<eof>` | `eof-object?` | what reading gives at the end of input |
 | symbol | `foo` | `symbol?` | interned by name |
-| pair / list | `(1 2 3)` `(a . b)` | `pair?` `list?` | lists are chains of pairs ending in `()`; no mutation |
-| vector | `#(1 2 "x")` | `vector?` | indexed array; `vector-set!` mutates; no mutation of lists |
+| pair / list | `(1 2 3)` `(a . b)` | `pair?` `list?` | lists are chains of pairs ending in `()`; `set-car!` and `set-cdr!` change one, for a program running alone (see Pairs and lists) |
+| vector | `#(1 2 "x")` | `vector?` | indexed array; `vector-set!` mutates, and may be shared by tasks |
 | hash table | `#<hash ("a" . 1) (b . 2)>` | `hash?` | a mutable map from strings, symbols, integers and booleans, listed in the order the keys were added. It prints this way but has no written form to read back |
 | procedure | `#<procedure f>` `#<primitive car>` | `procedure?` | closures and primitives are both procedures |
 | handle | `#<cred:class:id>` | `handle?` | opaque value a host primitive hands out: a program can pass it around and compare it, never open it. No builtin converts it to a string, and everything derived from it carries its class as a provenance tag (§5) |
@@ -151,7 +151,7 @@ already does.
 | `(begin e …)` | evaluate in order, yield the last |
 | `(set! name expr)` | assign an **existing** binding; error if unbound |
 | `(quote d)` | the datum itself |
-| `(quasiquote d)` | like `quote`, but `(unquote e)` evaluates `e` and `(unquote-splicing e)` splices a list. One level only: nested quasiquote is not supported |
+| `(quasiquote d)` | like `quote`, but `(unquote e)` evaluates `e` and `(unquote-splicing e)` splices a list. A quasiquote inside a quasiquote raises the level: only the `unquote` that matches the outer one is evaluated, and the inner ones are kept as written (`` `(a `(b ,(c ,(+ 1 2)))) `` is ``(a `(b ,(c 3)))``). Vectors work too: `` `#(1 ,x) `` |
 | `(cond (test body …) … [(test => proc)] [(else body …)])` | first true clause wins; `=>` passes the test value to `proc`; no clause → void |
 | `(and e …)` | short-circuit; `(and)` is `#t` |
 | `(or e …)` | short-circuit; `(or)` is `#f` |
@@ -288,6 +288,19 @@ primitive in the table (§7) and can be listed with `(primitives)`.
 | `(fold f init l)` | left fold: `(f acc x)` |
 | `(sort l less?)` | stable; `less?` is a Scheme or primitive procedure |
 | `(apply f arg … l)` | last argument must be a list |
+| `(set-car! p x)` `(set-cdr! p x)` | replace the first element / the rest of a pair; yield void. See below |
+
+**Changing a pair.** Pairs are shared by tasks without a lock, so a pair can be
+changed only by a program running alone: if another evaluation of the same
+interpreter is running, or any task is alive besides the one that calls
+`set-car!` (a task waiting counts), it is an error that says so. Wait for the tasks
+(`task-wait`) and then change the pair, or keep data that tasks share in a
+vector, a hash table or an atom, which lock. A change that would make a pair
+reachable from itself through cars and cdrs is an error, because a list must end:
+`length`, `append` and the printer would otherwise never finish. The list is as it
+was. What a change stores keeps its provenance tags, as in a vector. A list that a
+program wrote as a quoted constant is the same list every time that code runs,
+so changing it changes it for the next call; copy it first (`(append l '())`).
 
 ### Vectors
 
@@ -701,10 +714,8 @@ primitive, writing a gate) is in [embedding.md](embedding.md).
 Deliberately absent.
 
 - file ports and binary I/O (`read-file` and `std` cover files)
-- mutable strings, `string-set!` and `string-fill!`
+- mutable strings, `string-set!` and `string-fill!`: a string is a value, not a place. Build one with a string port, `list->string` or `string-append`
 - `define-macro` and other macro systems than `syntax-rules`
-- `set-car!` / `set-cdr!` and string mutation
-- nested quasiquote
 - full hygiene for macros (names a template refers to are not protected from a use's bindings; see Macros)
 - `call/cc`, `dynamic-wind`
 - an `eval` primitive: the kernel surface is not exposed to programs

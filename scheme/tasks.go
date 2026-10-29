@@ -198,12 +198,14 @@ func (in *Interp) startTask(c *Call, parent context.Context, g *groupObj, body t
 	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, group: g}
 	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
 	ctx = context.WithValue(ctx, taskKey{in}, t)
+	in.quiesce.Lock() // a pair is not changed while a task starts
 	rt.mu.Lock()
 	rt.alive++
 	if g != nil {
 		g.pending++
 	}
 	rt.mu.Unlock()
+	in.quiesce.Unlock()
 	r.wg.Add(1)
 	go runTask(ctx, t, obj, body)
 	return obj, nil

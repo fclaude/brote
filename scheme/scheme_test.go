@@ -197,7 +197,6 @@ func TestErrors(t *testing.T) {
 		{`(json-emit car)`, "cannot emit"},
 		{`(json-emit 'foo)`, "cannot emit symbol"},
 		{`(even? 1.0)`, "expected integer"},
-		{"`(1 `(2))", "nested quasiquote"},
 		{`,x`, "outside quasiquote"},
 		{`(else 1)`, "outside cond"},
 		{`(if)`, "expected 2 or 3"},

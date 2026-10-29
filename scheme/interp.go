@@ -62,6 +62,12 @@ type Interp struct {
 	loadMu  sync.Mutex
 	loading map[string]bool
 
+	// quiesce guards running, and the start of evaluations and tasks, against
+	// a change to a pair (mutation.go). running counts the evaluations in
+	// progress, each started by a host call that is not inside one.
+	quiesce sync.Mutex
+	running int
+
 	// tasks is non-nil when the host gave scripts tasks (WithTasks).
 	tasks *taskRuntime
 	// gateSem is held while a Gate that is not safe for concurrent use runs.
@@ -401,7 +407,7 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 				if len(form) != 1 {
 					return Value{}, errorf("quasiquote", "expected 1 argument")
 				}
-				return in.quasi(t, ctx, form[0], env)
+				return in.quasi(t, ctx, form[0], env, 1)
 
 			case "unquote", "unquote-splicing":
 				return Value{}, errorf(head.S, "outside quasiquote")

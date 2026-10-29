@@ -45,20 +45,30 @@ type taskKey struct{ in *Interp }
 // so a host call from outside any evaluation is its own; a handler that passes
 // its Call.Ctx on (as map and register-tool do) stays in its caller's.
 //
-// When this call started the evaluation and the interpreter has tasks, done is
-// non-nil and must be called with the evaluation's error once it is over: it
-// cancels the tasks still running, waits for them, and returns the error the
-// evaluation ends with.
+// When this call started the evaluation, done is non-nil and must be called
+// with the evaluation's error once it is over: it cancels the tasks still
+// running, waits for them, and returns the error the evaluation ends with.
 func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done func(error) error) {
 	if t, ok := ctx.Value(taskKey{in}).(*task); ok {
 		return t, ctx, nil
 	}
 	t = &task{limit: MaxDepth}
+	in.quiesce.Lock()
+	in.running++
+	in.quiesce.Unlock()
+	var r *root
 	if in.tasks != nil {
-		var r *root
 		ctx, r = in.tasks.newRoot(ctx)
 		t.root, t.obj = r, &taskObj{id: 0, root: r}
-		done = func(err error) error { return r.leave(err) }
+	}
+	done = func(err error) error {
+		if r != nil {
+			err = r.leave(err)
+		}
+		in.quiesce.Lock()
+		in.running--
+		in.quiesce.Unlock()
+		return err
 	}
 	return t, context.WithValue(ctx, taskKey{in}, t), done
 }

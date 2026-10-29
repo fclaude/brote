@@ -35,6 +35,7 @@ func (in *Interp) registerBuiltins() {
 	in.registerDoc()
 	in.registerChars()
 	in.registerPorts()
+	in.registerMutation()
 	in.registerCharStrings()
 	in.registerTaint()
 	if in.tasks != nil {
