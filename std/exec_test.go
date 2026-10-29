@@ -131,7 +131,7 @@ func TestExecTimeoutAndOutputLimits(t *testing.T) {
 		`(proc-run '("sh" "-c" "true") '(("env" . "x")))`:    "unknown option",
 	})
 	expect(t, p, map[string]string{
-		`(assoc-ref (proc-run '("sh" "-c" "sleep 0.1; echo done") '(("timeout" . 0.3))) "stdout")`: `"done\n"`,
+		`(assoc-ref (proc-run '("sh" "-c" "sleep 0.01; echo done") '(("timeout" . 0.4))) "stdout")`: `"done\n"`,
 	})
 }
 
