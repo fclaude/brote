@@ -205,6 +205,9 @@ func (r *reader) datum() (Value, error) {
 			r.next() // '#'
 			return r.vector()
 		}
+		if r.startsWith(`#\`) {
+			return r.char()
+		}
 		return r.atom()
 	}
 	return r.atom()
@@ -463,6 +466,35 @@ func (r *reader) atom() (Value, error) {
 		}
 	}
 	return Sym(tok), nil
+}
+
+// char reads #\a, #\space, #\x41: after the backslash, one character of any
+// kind (a delimiter too: #\( ), or else a name, or x and hex digits.
+func (r *reader) char() (Value, error) {
+	r.next() // '#'
+	r.next() // '\\'
+	if r.eof() {
+		return Value{}, ErrIncomplete
+	}
+	first := r.next()
+	start := r.pos
+	for !r.eof() && !isDelimiter(r.peek()) {
+		r.next()
+	}
+	rest := r.src[start:r.pos]
+	if rest == "" {
+		return Char(first), nil
+	}
+	name := string(first) + rest
+	if c, ok := charNames[name]; ok {
+		return Char(c), nil
+	}
+	if first == 'x' {
+		if n, err := strconv.ParseUint(rest, 16, 32); err == nil && utf8.ValidRune(rune(n)) {
+			return Char(rune(n)), nil
+		}
+	}
+	return Value{}, r.errf("unknown character name #\\%s", name)
 }
 
 func isPlainFloat(tok string) bool {

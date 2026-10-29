@@ -1,27 +1,20 @@
 package main
 
 import (
-	"bufio"
-	"errors"
-	"io"
-	"strings"
-
 	"github.com/fclaude/brote/scheme"
 	"github.com/fclaude/brote/std"
 )
 
 // registerHost gives a script what a command-line program needs of the machine
-// beyond the language: its own arguments, a file read into a string, and a line
-// of standard input. They are registered here and not in package scheme, which
+// beyond the language: its own arguments and a file read into a string. (Standard
+// input is the interpreter's input, given with scheme.WithInput, so that
+// read-line, read-char and read have it.) They are registered here and not in package scheme, which
 // has no host: an embedding program decides for itself what its scripts reach
 // (docs/embedding.md). Everything else a script can reach comes from package
 // std, under the policy the command was given (policy.go); read-file is
 // registered only where that policy lets scripts read files, and reads only
 // what it lets them read.
-//
-// readLine is registered only when the command does not read standard input
-// itself: the REPL does, and a script's read-line would take lines from under it.
-func registerHost(in *scheme.Interp, rt *std.Runtime, args []string, stdin io.Reader, readLine bool) error {
+func registerHost(in *scheme.Interp, rt *std.Runtime, args []string) error {
 	list := make([]scheme.Value, len(args))
 	for i, a := range args {
 		list[i] = scheme.Str(a)
@@ -54,26 +47,6 @@ func registerHost(in *scheme.Interp, rt *std.Runtime, args []string, stdin io.Re
 					return scheme.Value{}, err
 				}
 				return scheme.Str(text), nil
-			},
-		})
-	}
-	if readLine {
-		r := bufio.NewReader(stdin)
-		prims = append(prims, &scheme.Prim{
-			Name: "read-line",
-			Meta: scheme.Meta{
-				Doc:  "The next line of standard input without its line ending, or #f once there is no more.",
-				Host: true,
-			},
-			Handler: func(c *scheme.Call) (scheme.Value, error) {
-				line, err := r.ReadString('\n')
-				if err != nil && (!errors.Is(err, io.EOF) || line == "") {
-					if errors.Is(err, io.EOF) {
-						return scheme.Bool(false), nil
-					}
-					return scheme.Value{}, err
-				}
-				return scheme.Str(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")), nil
 			},
 		})
 	}

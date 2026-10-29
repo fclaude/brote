@@ -1,9 +1,5 @@
 package scheme
 
-import (
-	"io"
-)
-
 // mustRegister registers a builtin; a bad declaration is a programming
 // error, so it panics at startup rather than failing later.
 func (in *Interp) mustRegister(name, doc string, params []Param, variadic bool, h func(c *Call) (Value, error)) {
@@ -37,6 +33,9 @@ func (in *Interp) registerBuiltins() {
 	in.registerJSON()
 	in.registerMeta()
 	in.registerDoc()
+	in.registerChars()
+	in.registerPorts()
+	in.registerCharStrings()
 	in.registerTaint()
 	if in.tasks != nil {
 		in.registerTasks()
@@ -79,18 +78,26 @@ func (in *Interp) registerCore() {
 		return Value{}, &Error{Message: msg, Irritants: c.Args[1:]}
 	})
 
-	in.mustRegister("display", "Print x in human form.", any1, false, func(c *Call) (Value, error) {
-		c.t.printed = Union(c.t.printed, DeepTaint(c.Args[0]))
-		_, err := io.WriteString(c.t.writer(c.In), Display(c.Args[0]))
-		return Void, err
+	optPort := Param{Name: "port", Type: "any", Optional: true}
+	in.mustRegister("display", "Print x in human form, to a port or the current output.", []Param{{Name: "x", Type: "any"}, optPort}, false, func(c *Call) (Value, error) {
+		p, err := c.outPort(1)
+		if err != nil {
+			return Value{}, err
+		}
+		return Void, p.write(c, Display(c.Args[0]), DeepTaint(c.Args[0]))
 	})
-	in.mustRegister("write", "Print x in machine form.", any1, false, func(c *Call) (Value, error) {
-		c.t.printed = Union(c.t.printed, DeepTaint(c.Args[0]))
-		_, err := io.WriteString(c.t.writer(c.In), Write(c.Args[0]))
-		return Void, err
+	in.mustRegister("write", "Print x in machine form, to a port or the current output.", []Param{{Name: "x", Type: "any"}, optPort}, false, func(c *Call) (Value, error) {
+		p, err := c.outPort(1)
+		if err != nil {
+			return Value{}, err
+		}
+		return Void, p.write(c, Write(c.Args[0]), DeepTaint(c.Args[0]))
 	})
-	in.mustRegister("newline", "Print a newline.", nil, false, func(c *Call) (Value, error) {
-		_, err := io.WriteString(c.t.writer(c.In), "\n")
-		return Void, err
+	in.mustRegister("newline", "Print a newline, to a port or the current output.", []Param{optPort}, false, func(c *Call) (Value, error) {
+		p, err := c.outPort(0)
+		if err != nil {
+			return Value{}, err
+		}
+		return Void, p.write(c, "\n", Taint{})
 	})
 }

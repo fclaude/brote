@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -39,6 +40,7 @@ const (
 	KVoid               // the unspecified value
 	KHash               // hash table: a mutable map from strings, symbols, integers and booleans
 	KObject             // a native object Scheme can hold and pass on but not look into: a task, a channel (object.go)
+	KChar               // a character: one Unicode code point, in I
 )
 
 func (k Kind) String() string {
@@ -69,6 +71,8 @@ func (k Kind) String() string {
 		return "hash"
 	case KObject:
 		return "object"
+	case KChar:
+		return "character"
 	}
 	return "unknown"
 }
@@ -259,6 +263,9 @@ func Bool(b bool) Value {
 	return False
 }
 
+// Char builds a character.
+func Char(r rune) Value { return Value{Kind: KChar, I: int64(r)} }
+
 // Int builds an integer.
 func Int(n int64) Value { return Value{Kind: KInt, I: n} }
 
@@ -336,7 +343,7 @@ func Eqv(a, b Value) bool {
 	switch a.Kind {
 	case KNil, KVoid:
 		return true
-	case KBool, KInt:
+	case KBool, KInt, KChar:
 		return a.I == b.I
 	case KFloat:
 		return a.F == b.F
@@ -525,6 +532,12 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 		printHash(sb, v.Hash, write, transform, depth, st)
 	case KObject:
 		sb.WriteString(v.H.obj.String())
+	case KChar:
+		if write {
+			sb.WriteString(charName(rune(v.I)))
+		} else {
+			sb.WriteRune(rune(v.I))
+		}
 	case KVoid:
 		sb.WriteString("#<void>")
 	default:
@@ -572,6 +585,41 @@ func quote(sb *strings.Builder, s string) {
 		i++
 	}
 	sb.WriteByte('"')
+}
+
+// charNames are the names the reader knows for characters that are hard to see,
+// and the ones the writer uses.
+var charNames = map[string]rune{
+	"space": ' ', "newline": '\n', "tab": '\t', "return": '\r', "nul": 0, "null": 0,
+	"alarm": 7, "backspace": 8, "delete": 127, "escape": 27, "altmode": 27, "linefeed": '\n',
+}
+
+// charName is how Write shows r: #\a, #\space, #\x7 for a control character.
+func charName(r rune) string {
+	switch r {
+	case ' ':
+		return `#\space`
+	case '\n':
+		return `#\newline`
+	case '\t':
+		return `#\tab`
+	case '\r':
+		return `#\return`
+	case 0:
+		return `#\null`
+	case 7:
+		return `#\alarm`
+	case 8:
+		return `#\backspace`
+	case 127:
+		return `#\delete`
+	case 27:
+		return `#\escape`
+	}
+	if r < 0x20 || !utf8.ValidRune(r) || r == 0xfeff || unicode.Is(unicode.Zs, r) {
+		return fmt.Sprintf(`#\x%x`, r)
+	}
+	return `#\` + string(r)
 }
 
 func formatFloat(f float64) string {

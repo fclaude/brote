@@ -1,7 +1,8 @@
 // Command brote is the standalone Brote Scheme interpreter: a REPL, a script
 // runner and an expression evaluator over the same interpreter a Go program
 // embeds. It has the language's builtins, `load`, three host primitives for
-// scripts (command-line, read-file, read-line; host.go) and the extended
+// scripts (command-line and read-file; host.go), standard input as the current
+// input port, and the extended
 // library of package std under a policy (policy.go). By default a script may
 // reach everything the person running it can; -sandbox, -policy, -allow and
 // -deny narrow that.
@@ -54,8 +55,10 @@ What a script can reach (the standard library's modules; see docs/capabilities.m
 Scripts can run things at the same time: (spawn thunk), channels, (pmap f xs) and
 (with-timeout seconds thunk) are always there (see the language reference).
 
-A script can also (read-file path) into a string and (read-line) from standard
-input, which gives #f once there is no more; neither is there in the REPL.
+A script can also (read-file path) into a string, and read standard input with
+(read-line), (read-char) and (read), which give the end-of-file object, (eof-object),
+once there is no more; the REPL reads standard input itself, so there they find
+the end at once.
 
 An error is written to standard error and ends the run with status 1.
 `
@@ -116,7 +119,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		tracker = repl.NewTracker(stdout)
 		stdout = tracker
 	}
-	in := scheme.New(scheme.WithOutput(stdout), scheme.WithTasks(scheme.TaskLimits{}))
+	opts := []scheme.Option{scheme.WithOutput(stdout), scheme.WithTasks(scheme.TaskLimits{})}
+	if !interactive {
+		// The REPL reads standard input itself, so a script's read-line would
+		// take lines from under it; everywhere else the script has it.
+		opts = append(opts, scheme.WithInput(stdin))
+	}
+	in := scheme.New(opts...)
 	rt, err := std.Install(in, pol)
 	if err != nil {
 		fmt.Fprintf(stderr, "brote: %v\n", err)
@@ -127,7 +136,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// load would otherwise read any file the person can; keep it inside the grant.
 		in.SetGate(rt.Gate(nil))
 	}
-	if err := registerHost(in, rt, scriptArgs, stdin, !interactive); err != nil {
+	if err := registerHost(in, rt, scriptArgs); err != nil {
 		fmt.Fprintf(stderr, "brote: %v\n", err)
 		return 1
 	}

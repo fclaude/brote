@@ -28,7 +28,7 @@ type hashEntry struct {
 }
 
 // hashKey is what two keys must share to be the same key: equal? on strings,
-// symbols, integers and booleans, where a string and a symbol of the same
+// symbols, integers, characters and booleans, where a string and a symbol of the same
 // letters are different keys.
 type hashKey struct {
 	kind Kind
@@ -47,7 +47,7 @@ func keyOf(v Value) (hashKey, bool) {
 	switch v.Kind {
 	case KString, KSymbol:
 		return hashKey{kind: v.Kind, s: v.S}, true
-	case KInt, KBool:
+	case KInt, KBool, KChar:
 		return hashKey{kind: v.Kind, i: v.I}, true
 	}
 	return hashKey{}, false

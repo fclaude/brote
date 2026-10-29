@@ -143,3 +143,19 @@ func TestMacroDefinitionsAreNavigable(t *testing.T) {
 		t.Errorf("diagnostics: %+v", d.Diagnostics)
 	}
 }
+
+func TestCharactersDoNotUnbalanceTheSyntax(t *testing.T) {
+	d := Analyze("(define (f c) (if (char=? c #\\() 1 #\\)))\n(f #\\a)", Profile{})
+	if len(d.Diagnostics) != 0 {
+		t.Fatalf("diagnostics: %+v", d.Diagnostics)
+	}
+	var f *Definition
+	for _, def := range d.Definitions {
+		if def.Name == "f" {
+			f = def
+		}
+	}
+	if f == nil || d.DefinitionAt(Position{Line: 1, Character: 1}) != f {
+		t.Errorf("the call of f does not lead to its definition")
+	}
+}

@@ -31,6 +31,7 @@ the suite. How a Go program embeds the interpreter is in
 | `"""…"""` | raw string: no escapes, so the text is exactly what the file holds. See §1.1 |
 | `42` `-7` `+3` | integer (int64) |
 | `3.14` `1e3` `-0.5` `.5` | float (float64) |
+| `#\a` `#\space` `#\x41` | a character: `#\` and the character itself (any one, `#\(` too), or a name (`space` `newline` `tab` `return` `null` `alarm` `backspace` `delete` `escape`), or `x` and the code point in hex |
 | `#t` `#f` | booleans |
 | `.` | dotted pair inside a list: `(a . b)` |
 | anything else | a symbol; case-sensitive; `+`, `-`, `...`, `1+` are symbols |
@@ -88,6 +89,9 @@ already does.
 | integer | `42` | `integer?` | int64; wraps on overflow like Go |
 | float | `2.5` `1.0` | `float?` | float64; always printed with a `.` or exponent |
 | string | `"hi"` | `string?` | immutable UTF-8; lengths and indices count **runes** |
+| character | `#\a` | `char?` | one Unicode code point. `write` shows the shortest form the reader accepts (`#\a`, `#\space`, `#\x7`); `display` shows the character itself |
+| port | `#<input-port>` `#<output-port>` | `port?` | where text is read from or written to; see Ports |
+| end-of-file object | `#<eof>` | `eof-object?` | what reading gives at the end of input |
 | symbol | `foo` | `symbol?` | interned by name |
 | pair / list | `(1 2 3)` `(a . b)` | `pair?` `list?` | lists are chains of pairs ending in `()`; no mutation |
 | vector | `#(1 2 "x")` | `vector?` | indexed array; `vector-set!` mutates; no mutation of lists |
@@ -341,19 +345,70 @@ a table.
 | `(string->symbol s)` `(symbol->string sym)` `(symbol? x)` | |
 | `(format fmt arg …)` | `~a` display, `~s` write, `~%` newline, `~~` tilde; too few or too many args is an error |
 
-There is no character type; one-character strings serve that purpose.
+| `(string-ref s k)` | the character at rune index `k`; the time it takes grows with `k` |
+| `(string->list s [start [end]])` `(list->string l)` | the characters of a string as a list / a string of the characters in a list |
+| `(string c …)` `(make-string k [c])` | a string of the characters given / of `k` copies of `c` (a space by default) |
+| `(string-copy s [start [end]])` | part of a string (strings do not change, so this is `substring` with optional ends) |
+| `(string-for-each f s)` `(string-map f s)` | call `f` on each character / a string of the characters `f` returns |
+| `(string>? a b …)` `(string<=? a b …)` `(string>=? a b …)` `(string-ci=? a b …)` | more comparisons; the last ignores case |
+
+### Characters
+
+A character is one Unicode code point (§1 shows how to write one). A string is
+not a list of characters, but `string->list`, `list->string` and `string-ref`
+move between the two.
+
+| | |
+|---|---|
+| `(char? x)` | |
+| `(char->integer c)` `(integer->char n)` | the code point / the character; a surrogate or a number past `#x10FFFF` is an error |
+| `(char-upcase c)` `(char-downcase c)` | |
+| `(char-alphabetic? c)` `(char-numeric? c)` `(char-whitespace? c)` `(char-upper-case? c)` `(char-lower-case? c)` | by Unicode category; `char-numeric?` is true of decimal digits |
+| `(digit-value c)` | 0 to 9 for a decimal digit, else `#f` |
+| `(char=? a b …)` `(char<? a b …)` `(char>? a b …)` `(char<=? a b …)` `(char>=? a b …)` `(char-ci=? a b …)` | by code point, as a chain like `=`; the last ignores case |
+
+Characters are `eqv?` when they are the same code point, can be keys of hash
+tables, and `case` matches them.
 
 ### Output
 
 | | |
 |---|---|
-| `(display x)` | human form: strings without quotes |
-| `(write x)` | machine form: strings quoted and escaped, readable back |
-| `(newline)` | |
+| `(display x [port])` | human form: strings without quotes, characters as themselves |
+| `(write x [port])` | machine form: strings quoted and escaped, readable back |
+| `(newline [port])` | |
+| `(write-string s [port])` `(write-char c [port])` | |
 | `(with-output-to-string e …)` | a special form (reserved like the others): capture `display`/`write`/`newline` from `e …` and return the text |
 
-Output goes to the interpreter's output writer, which the host provides
-(the REPL uses stdout; an embedding host captures it or discards it). All three yield void.
+Without a port, output goes to the current output port: the interpreter's
+output writer, which the host provides (the REPL uses stdout; an embedding host
+captures it or discards it), or the capture of a `with-output-to-string` around
+it. All of them yield void.
+
+### Ports
+
+A port is where text is read from or written to. Brote has string ports and the
+two the interpreter has: the current output port and the current input port.
+There are no file ports; `read-file` and the modules of [std](std.md) do that.
+
+| | |
+|---|---|
+| `(open-input-string s)` | a port that reads the characters of `s` |
+| `(open-output-string)` `(get-output-string port)` | a port that collects what is written to it / the text so far |
+| `(call-with-output-string proc)` | call `proc` with a new string port; the text it wrote |
+| `(current-output-port)` `(current-input-port)` | the port `display` writes to, and the one `read-line` reads when it is not given one. The host decides what the input is (`scheme.WithInput`); with none it is empty |
+| `(read-char [port])` `(peek-char [port])` | the next character, taken or not, or the end-of-file object |
+| `(read-line [port])` | the next line without its line ending (`\n` or `\r\n`), or the end-of-file object. A final line with no ending is still a line |
+| `(read-string k [port])` | up to `k` characters as a string; the end-of-file object if there are none left |
+| `(read [port])` | parse the next datum the way the reader does (§1), or the end-of-file object. Nothing is evaluated: `(read (open-input-string "(+ 1 2)"))` is the list `(+ 1 2)` |
+| `(eof-object)` `(eof-object? x)` | |
+| `(port? x)` `(input-port? x)` `(output-port? x)` | |
+| `(close-port port)` `(close-input-port port)` `(close-output-port port)` | writing to a closed port is an error; reading one finds the end |
+
+A string port that holds text from a tagged source keeps its provenance (§5
+Provenance): what is read from it carries the tags, and so does the text
+`get-output-string` returns for anything tagged that was written to it. Ports
+can be shared by tasks; each operation is whole.
 
 ### Control
 
@@ -645,7 +700,8 @@ primitive, writing a gate) is in [embedding.md](embedding.md).
 
 Deliberately absent.
 
-- characters and the full string-port API (only `with-output-to-string`)
+- file ports and binary I/O (`read-file` and `std` cover files)
+- mutable strings, `string-set!` and `string-fill!`
 - `define-macro` and other macro systems than `syntax-rules`
 - `set-car!` / `set-cdr!` and string mutation
 - nested quasiquote

@@ -81,7 +81,7 @@ error: take: the list is shorter than 8
 
 ## Strings
 
-Strings are immutable UTF-8, and all lengths and indices count runes, which are the characters you'd see on screen. There is no character type. A one-character string does that job.
+Strings are immutable UTF-8, and all lengths and indices count runes, which are the characters you'd see on screen. A character is its own type, written `#\a`; `string-ref` gives one, `string->list` gives all of them, and `list->string` and `string` make a string from them.
 
 | Procedure | What it gives back |
 |---|---|
@@ -94,6 +94,9 @@ Strings are immutable UTF-8, and all lengths and indices count runes, which are 
 | `(string-index s sub)` | the rune index of the first place `sub` appears in `s`, or `#f` |
 | `(string-replace s old new)` | every occurrence of `old` replaced |
 | `(string-pad-left s n [pad])` `(string-pad-right s n [pad])` | add `pad` (a space unless you give one) on that side until the string is at least `n` runes long. They never cut a long string |
+| `(string-ref s k)` `(string->list s)` `(list->string l)` | a character / all the characters as a list / a string from a list of characters |
+| `(string-for-each f s)` `(string-map f s)` | call `f` on each character / a string of what `f` returns |
+| `(char-upcase c)` `(char-alphabetic? c)` `(char->integer c)` … | the [language reference](scheme.md#characters) lists the character procedures |
 | `(string->number s)` `(number->string n)` | `string->number` gives `#f` when the text isn't a number |
 | `(string->symbol s)` `(symbol->string sym)` | |
 | `(format fmt arg …)` | `~a` displays an argument, `~s` writes it, `~%` is a newline |
@@ -115,6 +118,47 @@ kiwis      3
 plums    140
 4
 ("a" "b" "" "c")
+```
+
+Characters make the little jobs easy to write. This reverses the words of a sentence, and counts its vowels:
+
+<!-- run -->
+```lisp
+(define (vowel? c) (and (member (char-downcase c) '(#\a #\e #\i #\o #\u)) #t))
+(define sentence "Brote is a small Scheme")
+(string-join (reverse (string-split sentence " ")) " ")
+(count vowel? (string->list sentence))
+(string-map char-upcase "shout")
+```
+
+```text
+"Scheme small a is Brote"
+7
+"SHOUT"
+```
+
+### Reading text from a string
+
+A string port lets code read a string a piece at a time, and `read` parses the data in it. The end of the text is the value `(eof-object)`, so a loop tests for it with `eof-object?`:
+
+<!-- run -->
+```lisp
+(define (read-all-lines text)
+  (let ((port (open-input-string text)))
+    (let loop ((acc '()))
+      (let ((line (read-line port)))
+        (if (eof-object? line)
+            (reverse acc)
+            (loop (cons line acc)))))))
+(read-all-lines "one\ntwo\nthree")
+(read (open-input-string "(a (b c) 42 \"text\")"))
+(call-with-output-string (lambda (port) (write 'hello port) (write-char #\space port) (write "world" port)))
+```
+
+```text
+("one" "two" "three")
+(a (b c) 42 "text")
+"hello \"world\""
 ```
 
 ## Vectors

@@ -59,7 +59,7 @@ func TestDocExamples(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer rt.Close()
-			if err := registerHost(in, rt, nil, strings.NewReader(""), false); err != nil {
+			if err := registerHost(in, rt, nil); err != nil {
 				t.Fatal(err)
 			}
 			lines := strings.Split(string(src), "\n")

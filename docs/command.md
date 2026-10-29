@@ -72,13 +72,13 @@ $ echo $?
 
 ## Arguments, files and standard input
 
-A script that needs to read something has three procedures to work with. They belong to the command, so a Go program that embeds Brote doesn't get them unless it registers its own.
+A script that needs to read something has two procedures of the command's own, and standard input. The first two belong to the command, so a Go program that embeds Brote doesn't get them unless it registers its own.
 
 | Procedure | What it gives back |
 |---|---|
 | `(command-line)` | the arguments after `--` as a list of strings, `()` when there are none |
 | `(read-file path)` | the contents of the file as a string. A file that can't be read is an error that names it |
-| `(read-line)` | the next line of standard input without its line ending, or `#f` when there's no more. Not available in the REPL, which reads standard input itself |
+| `(read-line)` `(read-char)` `(peek-char)` `(read-string k)` `(read)` | the next line (without its line ending), character, up to `k` characters, or datum of standard input, or `(eof-object)` once there is no more. These are the language's [port procedures](scheme.md#ports) on the current input port, which here is standard input. The REPL reads standard input itself, so there the input is empty |
 
 Everything after `--` belongs to the script, even if it looks like one of `brote`'s own flags:
 
@@ -100,11 +100,11 @@ three.txt: 3
 one.txt: 1
 ```
 
-And `read-line` loops until it sees `#f`:
+And `read-line` loops until it sees the end of input, which `eof-object?` tests for:
 
 <!-- run-shell -->
 ```console
-$ printf '(let loop ((line (read-line)) (n 0))\n  (if line\n      (begin (display n) (display " ") (display (string-upcase line)) (newline) (loop (read-line) (+ n 1)))))\n' > shout.scm
+$ printf '(let loop ((line (read-line)) (n 0))\n  (if (not (eof-object? line))\n      (begin (display n) (display " ") (display (string-upcase line)) (newline) (loop (read-line) (+ n 1)))))\n' > shout.scm
 $ printf 'first\nsecond\n' | brote shout.scm
 0 FIRST
 1 SECOND

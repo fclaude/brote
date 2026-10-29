@@ -41,6 +41,7 @@ type Interp struct {
 	gate    Gate
 	expand  func(string) string // rewrites path and argv arguments before the guard; nil for none
 	out     io.Writer           // where output goes outside a capture; safe for concurrent use
+	input   *port               // the current input port
 	isSF    map[string]bool
 	baseDir string
 
@@ -142,6 +143,9 @@ func New(opts ...Option) *Interp {
 	}
 	for _, o := range opts {
 		o(in)
+	}
+	if in.input == nil {
+		in.input = &port{input: true}
 	}
 	in.out = &syncWriter{w: in.out}
 	in.registerBuiltins()

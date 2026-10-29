@@ -136,22 +136,29 @@ func TestReadFileGivesTheContentsAndNamesAFileItCannotRead(t *testing.T) {
 	}
 }
 
-func TestReadLineTakesStandardInputLineByLineThenFalse(t *testing.T) {
+func TestReadLineTakesStandardInputLineByLineThenEOF(t *testing.T) {
 	status, out, errs := invoke(t, "one\ntwo\r\nthree", "-e", `(list (read-line) (read-line) (read-line) (read-line))`)
-	if status != 0 || out != "(\"one\" \"two\" \"three\" #f)\n" || errs != "" {
+	if status != 0 || out != "(\"one\" \"two\" \"three\" #<eof>)\n" || errs != "" {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
 	}
-	status, out, _ = invoke(t, "", "-e", `(read-line)`)
-	if status != 0 || out != "#f\n" {
+	status, out, _ = invoke(t, "", "-e", `(eof-object? (read-line))`)
+	if status != 0 || out != "#t\n" {
 		t.Fatalf("empty input: status %d, stdout %q", status, out)
 	}
 }
 
+func TestStandardInputIsReadableAsCharactersAndData(t *testing.T) {
+	status, out, errs := invoke(t, "ab (1 \"two\" three) rest", "-e", `(list (read-char) (peek-char) (read-char) (read) (read-string 3))`)
+	if status != 0 || out != "(#\\a #\\b #\\b (1 \"two\" three) \" re\")\n" || errs != "" {
+		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
+	}
+}
+
 // The REPL reads standard input itself, so a script's read-line would take
-// lines from under it: there is none there, and the other two still are.
-func TestTheReplHasNoReadLineButHasTheOthers(t *testing.T) {
-	status, out, errs := invoke(t, "(command-line)\n(read-line)\n", "--", "x")
-	if status != 0 || !strings.Contains(out, `("x")`) || !strings.Contains(errs+out, "read-line") {
+// lines from under it: in the REPL the current input has nothing in it.
+func TestTheReplHasNoStandardInputToRead(t *testing.T) {
+	status, out, errs := invoke(t, "(command-line)\n(eof-object? (read-line))\n", "--", "x")
+	if status != 0 || !strings.Contains(out, `("x")`) || !strings.Contains(out, "#t") || errs != "" {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
 	}
 }
