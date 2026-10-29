@@ -22,9 +22,11 @@ PAGES = [
     ("README.md", "_index.md", "Home", 1),
     ("docs/tour.md", "tour.md", "Tour", 2),
     ("docs/stdlib.md", "stdlib.md", "Library", 3),
-    ("docs/command.md", "command.md", "Command", 4),
-    ("docs/scheme.md", "scheme.md", "Reference", 5),
-    ("docs/embedding.md", "embedding.md", "Embedding", 6),
+    ("docs/std.md", "std.md", "Extended library", 4),
+    ("docs/command.md", "command.md", "Command", 5),
+    ("docs/scheme.md", "scheme.md", "Reference", 6),
+    ("docs/embedding.md", "embedding.md", "Embedding", 7),
+    ("docs/capabilities.md", "capabilities.md", "Capabilities", 8),
 ]
 TARGETS = {pathlib.PurePosixPath(src).name: dst for src, dst, _, _ in PAGES}
 TARGETS["README.md"] = "_index.md"

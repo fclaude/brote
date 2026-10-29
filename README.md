@@ -5,7 +5,7 @@
 
 Brote is a small Scheme interpreter written in Go. A Go program embeds it to let people script the program, and the `brote` command runs it on its own. It came out of the interpreter inside my coding agent, which I pulled out so other programs could use it.
 
-The language has 64-bit integers and floats, UTF-8 strings, lists, vectors, hash tables, closures, proper tail calls, `guard` for errors, and JSON. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go.
+The language has 64-bit integers and floats, UTF-8 strings, lists, vectors, hash tables, closures, proper tail calls, `guard` for errors, and JSON. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go. The `std` package has files, HTTP, programs, regular expressions and more behind a policy: a host grants a module, and how much of it, or the script doesn't have it at all.
 
 Here's a program and what the interpreter prints for it:
 
@@ -55,6 +55,8 @@ The documentation is at <https://fclaude.github.io/brote/>, and the same pages a
 
 - [A tour of Brote](docs/tour.md) teaches the language by typing things in.
 - [Standard library](docs/stdlib.md) lists the procedures for lists, strings, vectors and hash tables.
+- [Extended library](docs/std.md) covers files, HTTP, programs, the environment, time, randomness, regular expressions, encodings and digests.
+- [Capabilities](docs/capabilities.md) is how a host, or the `brote` command, chooses which of those a script gets, and how plugins ask for theirs.
 - [The brote command](docs/command.md) covers arguments, files and standard input.
 - [Language reference](docs/scheme.md) is the full description of the syntax and the builtins. A builtin that isn't documented there fails the test suite.
 - [Embedding in Go](docs/embedding.md) covers lifecycle, values, host operations, errors and gates.

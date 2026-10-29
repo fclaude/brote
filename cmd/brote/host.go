@@ -4,22 +4,24 @@ import (
 	"bufio"
 	"errors"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/fclaude/brote/scheme"
+	"github.com/fclaude/brote/std"
 )
 
 // registerHost gives a script what a command-line program needs of the machine
 // beyond the language: its own arguments, a file read into a string, and a line
 // of standard input. They are registered here and not in package scheme, which
 // has no host: an embedding program decides for itself what its scripts reach
-// (docs/embedding.md). The command runs the person's own scripts with the
-// person's own rights, so there is no gate.
+// (docs/embedding.md). Everything else a script can reach comes from package
+// std, under the policy the command was given (policy.go); read-file is
+// registered only where that policy lets scripts read files, and reads only
+// what it lets them read.
 //
 // readLine is registered only when the command does not read standard input
 // itself: the REPL does, and a script's read-line would take lines from under it.
-func registerHost(in *scheme.Interp, args []string, stdin io.Reader, readLine bool) error {
+func registerHost(in *scheme.Interp, rt *std.Runtime, args []string, stdin io.Reader, readLine bool) error {
 	list := make([]scheme.Value, len(args))
 	for i, a := range args {
 		list[i] = scheme.Str(a)
@@ -33,7 +35,9 @@ func registerHost(in *scheme.Interp, args []string, stdin io.Reader, readLine bo
 			},
 			Handler: func(c *scheme.Call) (scheme.Value, error) { return scheme.List(list...), nil },
 		},
-		{
+	}
+	if rt.Policy().Has(std.FS) {
+		prims = append(prims, &scheme.Prim{
 			Name: "read-file",
 			Meta: scheme.Meta{
 				Doc:    "The contents of a file, as a string. An unreadable file is an error that names it.",
@@ -45,13 +49,13 @@ func registerHost(in *scheme.Interp, args []string, stdin io.Reader, readLine bo
 				if err != nil {
 					return scheme.Value{}, err
 				}
-				b, err := os.ReadFile(path)
+				text, err := rt.ReadFile(path)
 				if err != nil {
 					return scheme.Value{}, err
 				}
-				return scheme.Str(string(b)), nil
+				return scheme.Str(text), nil
 			},
-		},
+		})
 	}
 	if readLine {
 		r := bufio.NewReader(stdin)

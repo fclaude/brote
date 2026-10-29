@@ -155,6 +155,8 @@ user opened.
 `Host` and `Hidden`; with no gate a program can load any file the process can
 read. A host that does not want that installs a gate (below).
 
+Package `std` has the batteries (files, HTTP, programs, the environment, the clock, regular expressions, encodings), a policy that chooses which a program gets and how much of each, and `Runtime.Gate`, a gate that holds `load` to the files the program may read. Read [capabilities](capabilities.md) before you run code you did not write.
+
 ## Gates and origin
 
 A `Gate` is the host's policy hook:

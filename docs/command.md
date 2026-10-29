@@ -1,12 +1,14 @@
 # The brote command
 
-`brote` is the interpreter on its own, for trying the language or running a script. It's the same interpreter a Go program embeds, with three extra procedures that a script needs to get at its arguments, a file and standard input.
+`brote` is the interpreter on its own, for trying the language or running a script. It's the same interpreter a Go program embeds, with three extra procedures that a script needs to get at its arguments, a file and standard input, and with the [extended library](std.md) (files, HTTP, programs, the clock, regular expressions and more) switched on.
 
 ```console
 brote                 a REPL on standard input
 brote FILE...         run files, in order, in one interpreter
 brote -e EXPR         evaluate an expression and print its value
 brote FILE -- ARG...  everything after -- is for the script
+brote -sandbox FILE   run with no access to files, network or programs
+brote -allow SPEC ... run with only what SPEC names
 brote -version
 ```
 
@@ -95,9 +97,34 @@ A file that doesn't exist is an error like any other:
 <!-- run-shell -->
 ```console
 $ brote -e '(read-file "missing.txt")'
-brote: read-file: open missing.txt: no such file or directory
+brote: read-file: missing.txt: no such file or directory
 ```
 
-## What the command can't do
+## What a script can reach
 
-`brote` can't write files, and it can't run programs or reach the network. `load` is how one file pulls in another. A script sees whatever the person running it can read, and nothing else of the machine. If you need more than that, embed the interpreter in a Go program and register the primitives you want (see [embedding](embedding.md)).
+`brote` runs your own scripts with your own rights, so by default a script gets every module of the [extended library](std.md): it can read and write files, make HTTP requests, run programs and read the environment, as you can. The options below take things away. They are how you run a script you did not write, or one you want to keep to its job. The [capabilities page](capabilities.md) explains the model and the policy language.
+
+| Option | Meaning |
+|---|---|
+| `-sandbox` | pure computation, the clock and randomness, and nothing that reaches the machine |
+| `-allow SPEC` | grant only what is named; repeatable. `fs.read=DIR`, `fs.write=DIR`, `net=HOST`, `exec=COMMAND`, `env=NAME`, or a module name such as `regexp` |
+| `-deny MODULE` | remove a module from the default; repeatable |
+| `-policy FILE` | start from the policy in `FILE` |
+| `-print-policy` | show what would be granted and exit |
+
+Naming something with `-allow` switches the start from everything to the sandbox, so the script gets what you named and no more. `-deny` goes the other way and subtracts from everything.
+
+<!-- run-shell -->
+```console
+$ printf 'hello\n' > in.txt
+$ brote -allow fs.read=. -e '(read-file "in.txt")'
+"hello\n"
+$ brote -allow fs.read=. -e '(read-file "/etc/hosts")'
+brote: read-file: /etc/hosts is outside the directories this host lets scripts read
+$ brote -sandbox -e '(read-file "in.txt")'
+brote: eval: unbound variable: read-file
+$ brote -deny net -deny exec -e '(string-length (read-file "in.txt"))'
+6
+```
+
+When one of these options is given, `load` is also held to the files the script may read. A file named on the command line is always run: you chose it.

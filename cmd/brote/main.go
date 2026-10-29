@@ -1,7 +1,10 @@
 // Command brote is the standalone Brote Scheme interpreter: a REPL, a script
 // runner and an expression evaluator over the same interpreter a Go program
-// embeds. It has the language's builtins, `load`, and three host primitives
-// for scripts (command-line, read-file, read-line; host.go), and no gate.
+// embeds. It has the language's builtins, `load`, three host primitives for
+// scripts (command-line, read-file, read-line; host.go) and the extended
+// library of package std under a policy (policy.go). By default a script may
+// reach everything the person running it can; -sandbox, -policy, -allow and
+// -deny narrow that.
 package main
 
 import (
@@ -15,10 +18,11 @@ import (
 
 	"github.com/fclaude/brote/repl"
 	"github.com/fclaude/brote/scheme"
+	"github.com/fclaude/brote/std"
 	buildversion "github.com/fclaude/brote/version"
 )
 
-const usage = `usage: brote [-e EXPR | FILE...] [-- ARG...]
+const usage = `usage: brote [OPTION...] [-e EXPR | FILE...] [-- ARG...]
        brote -version
 
 With no arguments brote reads Scheme from standard input and evaluates it,
@@ -30,6 +34,21 @@ session.
   -e EXPR     evaluate EXPR and print its value unless it is void
   -- ARG...   arguments for the script: (command-line) returns them as strings
   -version    print the version
+
+What a script can reach (the standard library's modules; see docs/capabilities.md):
+
+  By default every module is available: files, network, processes, environment,
+  clock, randomness, regexp, encodings, digests, paths.
+
+  -sandbox         start from the safe set instead: pure computation, the clock
+                   and randomness, and nothing that touches the machine
+  -policy FILE     start from the policy written in FILE
+  -allow SPEC      grant something; repeatable. Naming one switches the start
+                   from everything to the safe set. For example
+                     -allow fs.read=data   -allow fs.write=out
+                     -allow net=api.example.com   -allow exec=git   -allow env=HOME
+  -deny MODULE     take a module away from whatever the start was; repeatable
+  -print-policy    show what the script would be granted and exit
 
 A script can also (read-file path) into a string and (read-line) from standard
 input, which gives #f once there is no more; neither is there in the REPL.
@@ -48,6 +67,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(io.Discard)
 	expr := fs.String("e", "", "")
 	showVersion := fs.Bool("version", false, "")
+	sandbox := fs.Bool("sandbox", false, "")
+	policyFile := fs.String("policy", "", "")
+	printPolicy := fs.Bool("print-policy", false, "")
+	var allow, deny listFlag
+	fs.Var(&allow, "allow", "")
+	fs.Var(&deny, "deny", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
@@ -69,9 +94,29 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	pol, err := buildPolicy(*sandbox, *policyFile, allow, deny)
+	if err != nil {
+		fmt.Fprintf(stderr, "brote: %v\n", err)
+		return 2
+	}
+	if *printPolicy {
+		fmt.Fprintln(stdout, pol.Pretty())
+		return 0
+	}
+
 	in := scheme.New(scheme.WithOutput(stdout))
+	rt, err := std.Install(in, pol)
+	if err != nil {
+		fmt.Fprintf(stderr, "brote: %v\n", err)
+		return 1
+	}
+	defer rt.Close()
+	if *sandbox || *policyFile != "" || len(allow) > 0 || len(deny) > 0 {
+		// load would otherwise read any file the person can; keep it inside the grant.
+		in.SetGate(rt.Gate(nil))
+	}
 	interactive := !given["e"] && len(files) == 0
-	if err := registerHost(in, scriptArgs, stdin, !interactive); err != nil {
+	if err := registerHost(in, rt, scriptArgs, stdin, !interactive); err != nil {
 		fmt.Fprintf(stderr, "brote: %v\n", err)
 		return 1
 	}

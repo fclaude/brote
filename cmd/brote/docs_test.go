@@ -11,6 +11,7 @@ import (
 
 	"github.com/fclaude/brote/repl"
 	"github.com/fclaude/brote/scheme"
+	"github.com/fclaude/brote/std"
 )
 
 // The pages below hold examples that run. An example is a fenced block marked
@@ -27,7 +28,7 @@ import (
 // -run TestDocExamples rewrites the output blocks from what the examples do;
 // without it the test fails when a block differs, so a page cannot drift from
 // the program.
-var docPages = []string{"README.md", "docs/tour.md", "docs/stdlib.md", "docs/command.md", "docs/scheme.md", "docs/embedding.md"}
+var docPages = []string{"README.md", "docs/tour.md", "docs/stdlib.md", "docs/command.md", "docs/scheme.md", "docs/embedding.md", "docs/capabilities.md", "docs/std.md"}
 
 func TestDocExamples(t *testing.T) {
 	update := os.Getenv("DOCS_UPDATE") != ""
@@ -53,7 +54,12 @@ func TestDocExamples(t *testing.T) {
 			}
 			var out bytes.Buffer
 			in := scheme.New(scheme.WithOutput(&out))
-			if err := registerHost(in, nil, strings.NewReader(""), false); err != nil {
+			rt, err := std.Install(in, std.Full())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rt.Close()
+			if err := registerHost(in, rt, nil, strings.NewReader(""), false); err != nil {
 				t.Fatal(err)
 			}
 			lines := strings.Split(string(src), "\n")
