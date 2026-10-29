@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 )
 
 // Param documents one positional parameter of a primitive. Type is one of
@@ -163,6 +164,23 @@ type Prim struct {
 	// handler that must tell "not given" from #f, 0 or "" (an MCP tool,
 	// whose server applies its own default to what is not sent).
 	SkipsAsVoid bool
+}
+
+// Serialize wraps a handler that is not safe to call from several goroutines
+// at once so that it is called one at a time. Use it on a primitive of a host
+// that gives scripts tasks (WithTasks) when the handler keeps state it does not
+// guard itself.
+//
+// Do not use it on a handler that calls back into Scheme (Call.In.Apply): a
+// callback that waits for another task which is waiting for this handler would
+// never finish.
+func Serialize(h func(c *Call) (Value, error)) func(c *Call) (Value, error) {
+	var mu sync.Mutex
+	return func(c *Call) (Value, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return h(c)
+	}
 }
 
 // Gate is the guard's hook at the single Scheme→Go exit. Before returns nil

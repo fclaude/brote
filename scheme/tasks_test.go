@@ -396,3 +396,23 @@ func TestTasksFromSeveralEvaluationsAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// A handler that keeps state it does not guard is made safe by Serialize.
+func TestSerializeMakesAHandlerSafeForTasks(t *testing.T) {
+	e := newTaskInterp(t, defaultLimits(), nil)
+	n := 0 // not safe for concurrent use
+	if err := e.in.Register(&scheme.Prim{
+		Name: "count-up",
+		Meta: scheme.Meta{Doc: "test"},
+		Handler: scheme.Serialize(func(c *scheme.Call) (scheme.Value, error) {
+			n++
+			return scheme.Int(int64(n)), nil
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.ok(t, `(pfor-each (lambda (i) (let loop ((k 0)) (when (< k 100) (count-up) (loop (+ k 1))))) (iota 16))`)
+	if n != 1600 {
+		t.Errorf("n = %d", n)
+	}
+}

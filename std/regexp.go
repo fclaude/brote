@@ -3,6 +3,7 @@ package std
 import (
 	"fmt"
 	"regexp"
+	"sync"
 
 	"github.com/fclaude/brote/scheme"
 )
@@ -18,9 +19,14 @@ const (
 // regexps compiles patterns with Go's RE2 engine, which runs in time linear in
 // the input whatever the pattern, so a hostile pattern cannot hang the host.
 // It keeps the last few compiled.
-type regexps struct{ cache map[string]*regexp.Regexp }
+type regexps struct {
+	mu    sync.Mutex // scripts may match from several tasks at once
+	cache map[string]*regexp.Regexp
+}
 
 func (r *regexps) get(pat string) (*regexp.Regexp, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if re, ok := r.cache[pat]; ok {
 		return re, nil
 	}

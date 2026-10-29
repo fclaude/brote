@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/fclaude/brote/scheme"
 )
@@ -58,10 +59,14 @@ type fsRoot struct {
 	dir   string
 	write bool
 	plain bool // the whole file system, unscoped
-	root  rootOps
+
+	mu   sync.Mutex // guards root: it is opened by the first script to use it
+	root rootOps
 }
 
 func (r *fsRoot) open() (rootOps, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.root != nil {
 		return r.root, nil
 	}
@@ -81,6 +86,7 @@ func (r *fsRoot) open() (rootOps, error) {
 type fsys struct {
 	roots             []*fsRoot
 	anyRead, anyWrite bool
+	mu                sync.Mutex // guards volumes
 	volumes           map[string]*fsRoot
 	base              string
 	maxFile           int64
@@ -90,15 +96,19 @@ type fsys struct {
 func (f *fsys) Close() error {
 	var errs []error
 	for _, r := range append(f.roots, f.volumeRoots()...) {
+		r.mu.Lock()
 		if r.root != nil {
 			errs = append(errs, r.root.Close())
 			r.root = nil
 		}
+		r.mu.Unlock()
 	}
 	return errors.Join(errs...)
 }
 
 func (f *fsys) volumeRoots() []*fsRoot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]*fsRoot, 0, len(f.volumes))
 	for _, r := range f.volumes {
 		out = append(out, r)
@@ -125,6 +135,7 @@ func (f *fsys) resolve(path string, write bool) (*fsRoot, string, error) {
 	}
 	if best == nil && (f.anyWrite || (f.anyRead && !write)) {
 		vol := filepath.VolumeName(abs)
+		f.mu.Lock()
 		if f.volumes == nil {
 			f.volumes = map[string]*fsRoot{}
 		}
@@ -132,6 +143,7 @@ func (f *fsys) resolve(path string, write bool) (*fsRoot, string, error) {
 			f.volumes[vol] = &fsRoot{dir: vol + string(filepath.Separator), write: f.anyWrite, plain: true}
 		}
 		best = f.volumes[vol]
+		f.mu.Unlock()
 	}
 	if best == nil {
 		what := "read"

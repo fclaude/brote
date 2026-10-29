@@ -125,6 +125,19 @@ catches errors from `Apply` itself (to try the next file, say) should use it
 so as not to swallow a cancellation. Errors from a file loaded with `LoadFile`
 carry the path in front.
 
+## Tasks
+
+`scheme.WithTasks(scheme.TaskLimits{MaxTasks: 64, MaxDepth: 2000})` gives scripts `spawn`, channels, `select`, `pmap` and the rest ([the language reference](scheme.md) lists them). Without it those names are unbound and nothing here applies. The `brote` command turns tasks on.
+
+It is your statement that your handlers are safe to call from several goroutines at once: tasks run in parallel, so two tasks can be inside the same handler. `std`'s are. A handler that keeps state it does not guard itself is wrapped, `Handler: scheme.Serialize(h)`, which runs it one call at a time; do not wrap one that calls back into Scheme (`Call.In.Apply`), since a callback that waits for a task that is waiting for the handler would never finish.
+
+- **The gate.** `Gate.Before` is called one call at a time, whatever the tasks do, so a gate written for one goroutine, including one that stops to ask the person, needs no change. A task waiting its turn still stops with its context. A gate that is safe to call concurrently says so by implementing `scheme.ConcurrentGate` (an extra method, `ConcurrentSafe()`), and is then called without the lock.
+- **Origin and context.** A task's context is derived from its spawner's, so it has the same `Origin` and is cancelled with it. `Call.Ctx` is the calling task's context: a handler that honours it stops when its task is cancelled or its `with-timeout` ends, as `http-request`, `proc-run` and `time-sleep` do.
+- **Lifetime.** Tasks belong to the evaluation that started them, the outermost `EvalString`, `Apply` or `Eval`. When it returns, tasks still running are cancelled and waited for. A task that failed and that nothing waited for fails the evaluation. A denial or a halt in any task ends the evaluation, whatever the script does with it.
+- **Limits.** `MaxTasks` (default 256) bounds the tasks alive at once, across evaluations, and `spawn` past it raises an error. `MaxDepth` (default 2,500) is the nesting limit inside a spawned task; the task that started the evaluation keeps `scheme.MaxDepth`. A task is a goroutine and its stack, so these two bound what tasks can cost.
+- **Several evaluations at once.** Each call into the interpreter from outside is its own evaluation with its own tasks. Deadlock detection assumes the tasks of the interpreter are the only things that wake each other: a task waiting on a channel that a *different* evaluation will send to later looks deadlocked when every task is waiting.
+- **Audit.** `std.WithAudit`'s callback is called one event at a time.
+
 ## Cancellation and limits
 
 - The context is checked at every evaluation step, not only at primitive

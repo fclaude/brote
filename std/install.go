@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/fclaude/brote/scheme"
 )
@@ -33,7 +34,9 @@ type Option func(*installer)
 func WithBaseDir(dir string) Option { return func(s *installer) { s.base = dir } }
 
 // WithAudit reports each file write or removal, request and process to fn,
-// from the goroutine that is evaluating. It sees what happened whether or not a
+// from the goroutine that is evaluating. When scripts have tasks that is
+// several goroutines, but fn is called one event at a time, so it needs no
+// locking of its own. It sees what happened whether or not a
 // scheme.Gate is installed.
 func WithAudit(fn func(Event)) Option { return func(s *installer) { s.audit = fn } }
 
@@ -94,6 +97,14 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 	s.pol = p.Resolve(s.base)
 	if err := s.pol.validate(); err != nil {
 		return nil, err
+	}
+	if s.audit != nil {
+		fn, mu := s.audit, new(sync.Mutex)
+		s.audit = func(e Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			fn(e)
+		}
 	}
 	for _, m := range s.pol.Granted() {
 		fn := moduleInstallers[m]
