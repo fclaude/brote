@@ -146,6 +146,7 @@ type taskObj struct {
 	isDone    atomic.Bool
 	joiners   []*waiter   // under rt.mu
 	observed  atomic.Bool // someone waited for it
+	group     *groupObj   // the group it belongs to, if any
 }
 
 func (t *taskObj) Kind() string { return "task" }
@@ -168,26 +169,46 @@ func (t *taskObj) unobserved() error {
 	return &Error{Message: fmt.Sprintf("task %d failed and no one waited for it: %v", t.id, t.err), Cause: t.err}
 }
 
+// taskBody is what a task runs.
+type taskBody func(ctx context.Context, t *task) (Value, error)
+
 // spawn starts thunk as a new task of the calling task's evaluation.
 func (in *Interp) spawn(c *Call, thunk Value) (Value, error) {
+	obj, err := in.startTask(c, c.Ctx, nil, func(ctx context.Context, t *task) (Value, error) {
+		return in.apply(t, ctx, thunk, nil)
+	})
+	if err != nil {
+		return Value{}, err
+	}
+	return ObjectValue(obj), nil
+}
+
+// startTask runs body as a new task of the calling task's evaluation, under a
+// context derived from parent (the caller's, or its group's). A task of a
+// group belongs to the group: the group answers for its failure, not the
+// evaluation.
+func (in *Interp) startTask(c *Call, parent context.Context, g *groupObj, body taskBody) (*taskObj, error) {
 	rt, r := in.tasks, c.t.root
 	if rt.live.Add(1) > int64(rt.limits.MaxTasks) {
 		rt.live.Add(-1)
-		return Value{}, errorf(c.Name, "too many tasks: the limit is %d alive at once", rt.limits.MaxTasks)
+		return nil, errorf(c.Name, "too many tasks: the limit is %d alive at once", rt.limits.MaxTasks)
 	}
-	ctx, cancel := context.WithCancelCause(c.Ctx)
-	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel}
+	ctx, cancel := context.WithCancelCause(parent)
+	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, group: g}
 	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
 	ctx = context.WithValue(ctx, taskKey{in}, t)
 	rt.mu.Lock()
 	rt.alive++
+	if g != nil {
+		g.pending++
+	}
 	rt.mu.Unlock()
 	r.wg.Add(1)
-	go in.runTask(ctx, t, obj, thunk)
-	return ObjectValue(obj), nil
+	go runTask(ctx, t, obj, body)
+	return obj, nil
 }
 
-func (in *Interp) runTask(ctx context.Context, t *task, obj *taskObj, thunk Value) {
+func runTask(ctx context.Context, t *task, obj *taskObj, body taskBody) {
 	var v Value
 	var err error
 	defer func() {
@@ -198,7 +219,7 @@ func (in *Interp) runTask(ctx context.Context, t *task, obj *taskObj, thunk Valu
 		}
 		obj.finish(ctx, v, err)
 	}()
-	v, err = in.apply(t, ctx, thunk, nil)
+	v, err = body(ctx, t)
 }
 
 func (t *taskObj) finish(ctx context.Context, v Value, err error) {
@@ -210,7 +231,11 @@ func (t *taskObj) finish(ctx context.Context, v Value, err error) {
 		switch {
 		case isFatal(err):
 			r.setFatal(err)
-		case !cancelled:
+		case cancelled:
+		case t.group != nil:
+			t.observed.Store(true)
+			t.group.fail(err)
+		default:
 			r.noteFailure(t)
 		}
 	}
@@ -223,6 +248,17 @@ func (t *taskObj) finish(ctx context.Context, v Value, err error) {
 		}
 	}
 	t.joiners = nil
+	if g := t.group; g != nil {
+		g.pending--
+		if g.pending == 0 {
+			for _, w := range g.waiters {
+				if !w.done {
+					rt.fire(w, 0, Value{}, true, nil)
+				}
+			}
+			g.waiters = nil
+		}
+	}
 	rt.alive--
 	rt.checkDeadlock()
 	rt.mu.Unlock()

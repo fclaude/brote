@@ -345,6 +345,32 @@ Channels carry values between tasks:
        (iota 4)))
 ```
 
+Waiting for several things, and sharing data safely:
+
+| | |
+|---|---|
+| `(task-group f)` | call `(f group)`. Tasks started with `(group-spawn group thunk)` belong to the group, and `task-group` waits for all of them before it returns `f`'s value. The first of them to fail cancels the rest, and its error is the one raised |
+| `(pmap f xs)` | `map` with the calls running at the same time; results are in order. The first call to fail cancels the others and its error is raised. It uses as many tasks as the host's task limit leaves room for, the workers sharing the items |
+| `(pmap-limit n f xs)` | the same with at most `n` calls running at once: the form for a thousand URLs |
+| `(pfor-each f xs)` | `for-each` with the calls running at the same time |
+| `(race thunks)` | run the procedures at the same time and return the first value any returns; the rest are cancelled. A procedure that fails only drops out; if none returns a value, the first error is raised |
+| `(with-timeout seconds thunk)` | call `thunk` with a time limit. At the limit it is cancelled, including a request or program it is in the middle of, a `guard` inside it cannot catch that, and the caller gets an ordinary error `timed out after …` |
+| `(make-mutex)` `(with-lock m thunk)` | a lock, and a call made while holding it. The lock is released however `thunk` ends, so it cannot be left held. It is not reentrant: taking a lock you hold is a deadlock |
+| `(make-atom v)` `(atom-ref a)` `(atom-set! a v)` | a cell tasks can read and replace without tearing it |
+| `(swap! a f)` | replace the value with `(f value)` and return it, atomically: no other update is lost. `f` runs with nothing held, and again on the new value if another task changed the atom meanwhile, so it may run more than once and should have no effects of its own |
+| `(compare-and-set! a old new)` | store `new` only if the value is `eqv?` to `old`; whether it did |
+| `(make-once)` `(once-do o thunk)` | run `thunk` unless a task already has, and return its value, the same for every caller. A task that asks while another is running it waits. If it fails nothing is remembered |
+
+```lisp
+(define counts (make-hash))
+(pfor-each (lambda (word) (hash-update! counts word (lambda (n) (+ n 1)) 0)) words)
+
+(define total (make-atom 0))
+(pfor-each (lambda (n) (swap! total (lambda (t) (+ t n)))) (iota 1000))
+
+(with-timeout 5 (lambda () (http-request "GET" "https://example.com/slow")))
+```
+
 Rules:
 
 - **A task lives no longer than the evaluation that started it.** When the outermost `EvalString`, `Apply` or `LoadFile` returns, tasks still running are cancelled and waited for first. A task that failed and that nothing waited for fails the evaluation instead of being dropped; a script that wants fire-and-forget catches the error inside the thunk.

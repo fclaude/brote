@@ -110,7 +110,7 @@ type pendingTimer struct {
 // startTimer runs fn (with rt.mu held) after d, and keeps the interpreter from
 // calling a wait a deadlock until it has. The evaluation r ends it if it has
 // not run by then.
-func (rt *taskRuntime) startTimer(r *root, d time.Duration, fn func()) {
+func (rt *taskRuntime) startTimer(r *root, d time.Duration, fn func()) *pendingTimer {
 	p := &pendingTimer{}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -127,6 +127,19 @@ func (rt *taskRuntime) startTimer(r *root, d time.Duration, fn func()) {
 		fn()
 		rt.checkDeadlock()
 	})
+	return p
+}
+
+// stopTimer ends a timer that has not run, so it no longer counts as
+// something that can wake a task.
+func (rt *taskRuntime) stopTimer(p *pendingTimer) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !p.fired {
+		p.fired = true
+		p.timer.Stop()
+		rt.timers--
+	}
 }
 
 // stopTimers ends the evaluation's timers that have not run. rt.mu is held.

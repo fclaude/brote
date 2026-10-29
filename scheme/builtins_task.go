@@ -79,6 +79,8 @@ func (in *Interp) registerTasks() {
 		return ObjectValue(c.t.obj), nil
 	})
 	in.registerChannels()
+	in.registerGroups()
+	in.registerLocks()
 	in.mustRegisterOpaque("task?", "True for tasks.", []Param{{Name: "x", Type: "any"}}, false, func(c *Call) (Value, error) {
 		_, ok := ObjectOf(c.Args[0]).(*taskObj)
 		return Bool(ok), nil
@@ -256,5 +258,206 @@ func (in *Interp) registerChannels() {
 				return Value{}, errorf(c.Name, "argument 1: expected 0 to 1e9 seconds, got %s", Write(n))
 			}
 			return ObjectValue(c.In.tasks.after(c.t.root, time.Duration(secs*float64(time.Second)))), nil
+		})
+}
+
+func (in *Interp) registerGroups() {
+	fn := Param{Name: "f", Type: "any", Doc: "procedure of one argument"}
+	xs := Param{Name: "xs", Type: "list"}
+
+	in.mustRegister("task-group", "Call (f group). Tasks started with group-spawn belong to the group, and task-group waits for all of them before it returns f's value. The first of them to fail cancels the rest and its error is the one raised here.",
+		[]Param{{Name: "f", Type: "any", Doc: "procedure of one argument: the group"}}, false, func(c *Call) (Value, error) {
+			f, err := c.Proc(0)
+			if err != nil {
+				return Value{}, err
+			}
+			g := c.In.tasks.newGroup(c.Ctx)
+			v, ferr := c.In.Apply(c.Ctx, f, []Value{ObjectValue(g)})
+			if gerr := g.finish(c, ferr); gerr != nil {
+				return Value{}, gerr
+			}
+			return v, ferr
+		})
+	in.mustRegister("group-spawn", "Start a procedure of no arguments as a task of a group. Returns the task.",
+		[]Param{{Name: "group", Type: "task group"}, {Name: "thunk", Type: "any", Doc: "procedure of no arguments"}}, false, func(c *Call) (Value, error) {
+			g, err := objArg[*groupObj](c, 0, "task group")
+			if err != nil {
+				return Value{}, err
+			}
+			thunk, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			obj, err := g.spawn(c.In, c, func(ctx context.Context, t *task) (Value, error) {
+				return c.In.apply(t, ctx, thunk, nil)
+			})
+			if err != nil {
+				return Value{}, err
+			}
+			return ObjectValue(obj), nil
+		})
+	in.mustRegister("pmap", "Like map over one list, with the calls running at the same time. Results are in order. The first call to fail cancels the others and its error is raised.",
+		[]Param{fn, xs}, false, func(c *Call) (Value, error) {
+			f, err := c.Proc(0)
+			if err != nil {
+				return Value{}, err
+			}
+			items, err := c.List(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.poolMap(c, f, items, max(len(items), 1), true)
+		})
+	in.mustRegister("pmap-limit", "Like pmap, with at most n calls running at once: the form to use for a thousand URLs.",
+		[]Param{{Name: "n", Type: "integer", Doc: "at most this many at once"}, fn, xs}, false, func(c *Call) (Value, error) {
+			n, err := c.Int(0)
+			if err != nil {
+				return Value{}, err
+			}
+			if n < 1 {
+				return Value{}, errorf(c.Name, "argument 1: expected a positive integer, got %d", n)
+			}
+			f, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			items, err := c.List(2)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.poolMap(c, f, items, int(min(n, int64(len(items)+1))), true)
+		})
+	in.mustRegister("pfor-each", "Like for-each over one list, with the calls running at the same time. Yields void. The first call to fail cancels the others and its error is raised.",
+		[]Param{fn, xs}, false, func(c *Call) (Value, error) {
+			f, err := c.Proc(0)
+			if err != nil {
+				return Value{}, err
+			}
+			items, err := c.List(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.poolMap(c, f, items, max(len(items), 1), false)
+		})
+	in.mustRegister("race", "Run procedures of no arguments at the same time and return the value of the first to return one; the rest are cancelled. If none returns a value, raises the first error.",
+		[]Param{{Name: "thunks", Type: "list"}}, false, func(c *Call) (Value, error) {
+			items, err := c.List(0)
+			if err != nil {
+				return Value{}, err
+			}
+			if len(items) == 0 {
+				return Value{}, errorf(c.Name, "no procedures to run")
+			}
+			for i, it := range items {
+				if !it.IsProcedure() {
+					return Value{}, errorf(c.Name, "element %d: expected a procedure, got %s %s", i+1, it.Kind, Write(it))
+				}
+			}
+			return c.In.race(c, items)
+		})
+	in.mustRegister("with-timeout", "Call a procedure of no arguments with a time limit in seconds. At the limit it is cancelled, including a request or program it is in the middle of, and the caller gets an ordinary error \"timed out\".",
+		[]Param{{Name: "seconds", Type: "number"}, {Name: "thunk", Type: "any", Doc: "procedure of no arguments"}}, false, func(c *Call) (Value, error) {
+			n, err := c.Number(0)
+			if err != nil {
+				return Value{}, err
+			}
+			secs := n.AsFloat()
+			if secs < 0 || secs != secs || secs > 1e9 {
+				return Value{}, errorf(c.Name, "argument 1: expected 0 to 1e9 seconds, got %s", Write(n))
+			}
+			thunk, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.withTimeout(c, time.Duration(secs*float64(time.Second)), thunk)
+		})
+}
+
+func (in *Interp) registerLocks() {
+	atom := Param{Name: "atom", Type: "atom"}
+
+	in.mustRegisterOpaque("make-mutex", "A new lock.", nil, false, func(c *Call) (Value, error) {
+		rt := c.In.tasks
+		return ObjectValue(&mutexObj{rt: rt, id: rt.ids.Add(1)}), nil
+	})
+	in.mustRegister("with-lock", "Call a procedure of no arguments while holding a lock, waiting for it first if another task has it. The lock is released however the procedure ends, an error or a cancellation included. It is not reentrant: taking a lock you hold is a deadlock.",
+		[]Param{{Name: "mutex", Type: "mutex"}, {Name: "thunk", Type: "any", Doc: "procedure of no arguments"}}, false, func(c *Call) (Value, error) {
+			m, err := objArg[*mutexObj](c, 0, "mutex")
+			if err != nil {
+				return Value{}, err
+			}
+			thunk, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.withLock(c, m, thunk)
+		})
+	in.mustRegister("make-atom", "A new atom holding a value: a cell tasks can read and replace without tearing it.",
+		[]Param{{Name: "v", Type: "any"}}, false, func(c *Call) (Value, error) {
+			a := &atomObj{id: c.In.tasks.ids.Add(1)}
+			v := c.Args[0]
+			a.p.Store(&v)
+			return ObjectValue(a), nil
+		})
+	in.mustRegister("atom-ref", "The value in an atom.", []Param{atom}, false, func(c *Call) (Value, error) {
+		a, err := objArg[*atomObj](c, 0, "atom")
+		if err != nil {
+			return Value{}, err
+		}
+		return *a.p.Load(), nil
+	})
+	in.mustRegister("atom-set!", "Replace the value in an atom.", []Param{atom, {Name: "v", Type: "any"}}, false, func(c *Call) (Value, error) {
+		a, err := objArg[*atomObj](c, 0, "atom")
+		if err != nil {
+			return Value{}, err
+		}
+		v := c.Args[1]
+		a.p.Store(&v)
+		return Void, nil
+	})
+	in.mustRegister("swap!", "Replace the value in an atom with (f value) and return it, atomically: no other update is lost. f runs with no lock held, and again on the new value if another task changed the atom meanwhile, so it may run more than once and should have no effects of its own.",
+		[]Param{atom, {Name: "f", Type: "any", Doc: "procedure of one argument"}}, false, func(c *Call) (Value, error) {
+			a, err := objArg[*atomObj](c, 0, "atom")
+			if err != nil {
+				return Value{}, err
+			}
+			f, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return a.swap(c, f)
+		})
+	in.mustRegister("compare-and-set!", "Replace the value in an atom with new only if it is eqv? to old. Returns whether it did.",
+		[]Param{atom, {Name: "old", Type: "any"}, {Name: "new", Type: "any"}}, false, func(c *Call) (Value, error) {
+			a, err := objArg[*atomObj](c, 0, "atom")
+			if err != nil {
+				return Value{}, err
+			}
+			for {
+				cur := a.p.Load()
+				if !Eqv(*cur, c.Args[1]) {
+					return False, nil
+				}
+				nv := c.Args[2]
+				if a.p.CompareAndSwap(cur, &nv) {
+					return True, nil
+				}
+			}
+		})
+	in.mustRegisterOpaque("make-once", "A new once: a place to run a procedure exactly once.", nil, false, func(c *Call) (Value, error) {
+		rt := c.In.tasks
+		return ObjectValue(&onceObj{rt: rt, id: rt.ids.Add(1)}), nil
+	})
+	in.mustRegister("once-do", "Call a procedure of no arguments unless a task already has, and return its value, the same for every caller. A task that asks while another is running it waits for that one. If it fails, nothing is remembered and the next caller runs it again.",
+		[]Param{{Name: "once", Type: "once"}, {Name: "thunk", Type: "any", Doc: "procedure of no arguments"}}, false, func(c *Call) (Value, error) {
+			o, err := objArg[*onceObj](c, 0, "once")
+			if err != nil {
+				return Value{}, err
+			}
+			thunk, err := c.Proc(1)
+			if err != nil {
+				return Value{}, err
+			}
+			return c.In.onceDo(c, o, thunk)
 		})
 }
