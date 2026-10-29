@@ -1,7 +1,10 @@
 # Design: tasks, channels and shared memory
 
-Status: proposal. Nothing here is implemented. This page is not one of the
-documentation pages the tests run, and none of its examples are checked.
+Status: implemented (see [What was built](#what-was-built) for where the code
+differs from the proposal below). This is the design record, not user
+documentation: the language reference is [scheme.md](../scheme.md#tasks) and the
+embedding rules are in [embedding.md](../embedding.md#tasks). The examples on this
+page are not run by the tests.
 
 Brote gets **tasks** that behave like goroutines: `(spawn thunk)` starts one, it
 runs **in parallel** with the others on all the cores the host allows, it shares
@@ -259,12 +262,16 @@ not visible. The representation is free to improve on a map per frame: a small
 slice of bindings with a linear scan is one allocation instead of several, and
 does not change the locking.
 
-### Channels and select on Go channels
+### Channels, select, joins and locks on one wait-queue core
 
-A Brote channel wraps a Go `chan Value`. `select` is `reflect.Select` over the
-cases plus the task's `ctx.Done()`, so blocking, closing, buffering and random
-choice are the Go runtime's semantics rather than a reimplementation. Every
-blocking wait counts itself into the deadlock detector first.
+Everything a task waits for (a channel, a `select`, `task-wait`, a lock, a group,
+a timer) parks on one core, under one mutex per interpreter (`sync.go`). The
+proposal wrapped Go channels and `reflect.Select`; that cannot say *exactly*
+when every task is waiting, because a task is "about to wait" before its
+channel operation actually parks, and counting it then reports a deadlock that
+a sender one instruction away would have prevented. With one lock, "this task
+parks" and "that task wakes it" are decided together, so detection is exact and
+needs no timeout.
 
 ## What was measured
 
@@ -350,6 +357,53 @@ copying the environment changes the meaning of `set!`), and **CPS or a register
 machine** (right in the long run, and every builtin that calls `Apply` would be
 rewritten with it).
 
+## What was built
+
+The proposal above was built in seven commits (`git log --oneline -- docs/design/tasks.md`).
+Where it differs:
+
+- **Cases are `(on-recv ch)` and `(on-send ch v)`**, not `(recv ch)` and `(send ch v)`,
+  so a list of cases needs no quoting. `select` with a default returns
+  `(-1 . result)` of the default procedure.
+- **The wait-queue core** above, instead of Go channels.
+- **`pmap` and `pfor-each` run a pool** of as many workers as the task limit
+  leaves room for, which share the items, so a list of a thousand needs no
+  `pmap-limit` to stay under `MaxTasks`.
+- **`with-timeout` runs the thunk in the calling task** under a deadline that is
+  one of the interpreter's timers, rather than in a new task. A guard inside it
+  cannot catch the timeout, a request in flight is cancelled, and a wait it will
+  end is not reported as a deadlock.
+- **Native objects** (tasks, channels, locks, atoms) are a new value kind,
+  `KObject`, held in the existing `Handle` field so `Value` did not grow.
+- **The tasks of an evaluation end with it, and the error says so** when a later
+  evaluation waits for one. The REPL treats each line as an evaluation, so tasks
+  and their waiting go in one expression there. A `Background` grant for
+  tasks that outlive a call (open question 2) is not built.
+- **Diagnostics** are in `analysis/concurrency.go`: shared `set!` from a task,
+  waiting while holding a lock, and effects in a `swap!` or `hash-update!`
+  procedure.
+- **`std`'s audit** found three real problems, all fixed: the regexp cache, the
+  lazily opened directory roots, and the audit callback.
+
+### Results
+
+`(fib 22)` in one interpreter on a 16-core machine; the 16-goroutine run does
+16 times the work.
+
+| | Before | After |
+|---|---|---|
+| Serial | 73 ms | 51 ms |
+| Allocations per run | 1.03 M | 0.40 M |
+| Bytes per run | 223 MB | 59 MB |
+| 16 goroutines | 1.34 s | 0.28 s |
+| Speed-up over running them serially | 0.9× | 2.9× |
+| Definitions, loops and `map` (`BenchmarkBodies`) | 24.5 ms | 15.6 ms |
+
+The 4× target for 16 goroutines is not met: collection and memory bandwidth
+still limit it. What is left is `Value` itself (about 112 bytes, copied
+everywhere), the argument slice each application makes, and the `Call` each
+primitive call allocates.
+
 ## Order of work
 
 1. **Make the heap safe, before any task exists.** Locked frames and a
@@ -393,6 +447,8 @@ rewritten with it).
   the benchmark above does not regress.
 
 ## Open questions
+
+(Resolved ones are noted. 2 and 5 remain open.)
 
 1. **Unobserved task errors** fail the root. The alternative is a host hook and a
    silent default. Loud is the proposal.

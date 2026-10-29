@@ -416,3 +416,11 @@ func TestSerializeMakesAHandlerSafeForTasks(t *testing.T) {
 		t.Errorf("n = %d", n)
 	}
 }
+
+// A task cannot be waited for by a later evaluation: it ended with the one
+// that started it, and the error says so.
+func TestWaitingFromALaterEvaluationSaysWhyTheTaskIsGone(t *testing.T) {
+	e := newTaskInterp(t, defaultLimits(), nil)
+	e.ok(t, `(define saved (spawn (lambda () (hold))))`)
+	e.fails(t, `(task-wait saved)`, "when the evaluation that started it ended")
+}

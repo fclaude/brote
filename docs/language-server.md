@@ -42,3 +42,13 @@ its diagnostics and navigation; completion and hover need editor UI support.
 
 Run `python3 scripts/lsp-smoke.py /path/to/brote-lsp` to exercise the packaged
 server's real stdio connection and host-profile support.
+
+## Warnings about tasks
+
+Besides reader errors, the server warns (severity "warning") about the shapes of code that tasks make easy to get wrong:
+
+- a `set!` of a variable that other tasks can see, inside a thunk given to `spawn`, `group-spawn`, `pmap`, `pmap-limit`, `pfor-each` or `race`. Another task's write can be lost, and when the new value is computed from the old one the message says so; use an atom (`make-atom`, `swap!`) or `with-lock`;
+- a call that waits for another task (`channel-recv`, `task-wait`, `select`, `pmap`, and so on) inside a `with-lock` procedure, since that task may be waiting for the lock;
+- a side effect (`display`, any procedure ending in `!` other than `set!`) inside the procedure given to `swap!` or `hash-update!`, which may call it more than once.
+
+They look at the shape of the text and never run it, so a procedure passed by name is not examined.

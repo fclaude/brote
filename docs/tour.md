@@ -238,6 +238,97 @@ Hash tables map keys (strings, symbols, integers and booleans) to values. Here's
 
 `hash-update!` takes the old value (or the default, `0`, when the key is new) and stores what the procedure returns. The entries come back in the order the keys first appeared. The [standard library](stdlib.md) has the rest of the table procedures.
 
+## Doing several things at once
+
+Waiting is most of what a script does: for a web server, for a program to finish. Tasks let it wait for several things together. `pmap` is `map` with every call running at the same time:
+
+<!-- run -->
+```lisp
+(define (square n) (* n n))
+(pmap square '(1 2 3 4 5))
+```
+
+```text
+(1 4 9 16 25)
+```
+
+Each call is a *task*. Here they are `time-sleep` calls of a fifth of a second each; ten of them one after another would take two seconds, and together they take a fifth:
+
+<!-- run -->
+```lisp
+(define start (time-now))
+(pmap (lambda (n) (time-sleep 0.2) n) (iota 10))
+(< (- (time-now) start) 1)
+```
+
+```text
+(0 1 2 3 4 5 6 7 8 9)
+#t
+```
+
+Tasks share the program's variables, so two of them changing one variable can step on each other: `(set! hits (+ hits 1))` reads `hits` and then writes it, and a write another task made in between is lost. For a counter, use an *atom*, which applies the change as one step:
+
+<!-- run -->
+```lisp
+(define hits (make-atom 0))
+(pfor-each (lambda (i) (swap! hits (lambda (n) (+ n 1)))) (iota 1000))
+(atom-ref hits)
+```
+
+```text
+1000
+```
+
+(`hash-update!` does the same for a table entry, which is why the table of counts above is safe to fill from tasks.) Tasks that work through a queue talk by *channel*. Here three workers square the numbers they are given, and the function hands back the results:
+
+<!-- run -->
+```lisp
+(define (square-all numbers)
+  (let ((jobs (make-channel))
+        (results (make-channel (length numbers))))
+    (let ((workers (map (lambda (id)
+                          (spawn (lambda ()
+                                   (channel-for-each (lambda (n) (channel-send! results (* n n))) jobs))))
+                        (iota 3))))
+      (for-each (lambda (n) (channel-send! jobs n)) numbers)
+      (channel-close! jobs)
+      (task-wait-all workers)
+      (map (lambda (i) (channel-recv results)) numbers))))
+(sort (square-all (iota 10)) <)
+```
+
+```text
+(0 1 4 9 16 25 36 49 64 81)
+```
+
+Everything that involves the tasks is inside one call, and that matters: *a task lives no longer than the program that started it*. At the prompt every line you type is a program of its own, so a task started on one line is stopped when the line ends. Start tasks and wait for them in one expression, as `square-all` does, or in one file.
+
+A slow call can be given a time limit. When it runs out, whatever the call was in the middle of stops, and the error can be caught outside:
+
+<!-- run -->
+```lisp
+(guard (e (#t (cdr (assq 'message e))))
+  (with-timeout 0.1 (lambda () (time-sleep 5))))
+```
+
+```text
+"with-timeout: timed out after 100ms"
+```
+
+Waiting for something that can never happen is an error, not a hang: if every task is waiting for another, the program is told so.
+
+<!-- run -->
+```lisp
+(guard (e (#t (cdr (assq 'message e))))
+  (channel-recv (make-channel)))
+```
+
+```text
+"deadlock: all tasks are waiting for one another and none can run"
+```
+
+The [language reference](scheme.md#tasks) lists everything tasks can do, and the rules for errors and cancellation.
+
 ## Running a file
 
 Put the same forms in a file and pass its name to `brote`. Files print only what the program prints, since there's no prompt to echo values at:

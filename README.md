@@ -5,7 +5,7 @@
 
 Brote is a small Scheme interpreter written in Go. A Go program embeds it to let people script the program, and the `brote` command runs it on its own. It came out of the interpreter inside my coding agent, which I pulled out so other programs could use it.
 
-The language has 64-bit integers and floats, UTF-8 strings, lists, vectors, hash tables, closures, proper tail calls, `guard` for errors, and JSON. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go. The `std` package has files, HTTP, programs, regular expressions and more behind a policy: a host grants a module, and how much of it, or the script doesn't have it at all.
+The language has 64-bit integers and floats, UTF-8 strings, lists, vectors, hash tables, closures, proper tail calls, `guard` for errors, and JSON. Tasks and channels, like goroutines, run a script's work at the same time on every core, and cannot corrupt the interpreter or crash the host. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go. The `std` package has files, HTTP, programs, regular expressions and more behind a policy: a host grants a module, and how much of it, or the script doesn't have it at all.
 
 Here's a program and what the interpreter prints for it:
 

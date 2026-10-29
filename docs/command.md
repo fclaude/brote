@@ -1,6 +1,6 @@
 # The brote command
 
-`brote` is the interpreter on its own, for trying the language or running a script. It's the same interpreter a Go program embeds, with three extra procedures that a script needs to get at its arguments, a file and standard input, and with the [extended library](std.md) (files, HTTP, programs, the clock, regular expressions and more) switched on.
+`brote` is the interpreter on its own, for trying the language or running a script. It's the same interpreter a Go program embeds, with three extra procedures that a script needs to get at its arguments, a file and standard input, and with [tasks and channels](scheme.md#tasks) and the [extended library](std.md) (files, HTTP, programs, the clock, regular expressions and more) switched on.
 
 ```console
 brote                 a REPL on standard input

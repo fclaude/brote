@@ -72,7 +72,7 @@ type scope struct {
 type walker struct{ d *Document }
 
 func Builtins() []Symbol {
-	in := scheme.New(scheme.WithOutput(io.Discard))
+	in := scheme.New(scheme.WithOutput(io.Discard), scheme.WithTasks(scheme.TaskLimits{}))
 	var out []Symbol
 	for _, p := range in.Prims() {
 		s := Symbol{Name: p.Name, Doc: p.Meta.Doc, Variadic: p.Meta.Variadic}
@@ -117,6 +117,7 @@ func Analyze(text string, profile Profile) *Document {
 	w := walker{d}
 	root := &scope{bindings: map[string]*Definition{}, end: len(text)}
 	w.body(nodes, root)
+	w.concurrency(nodes)
 	return d
 }
 func (d *Document) rng(a, b int) Range { return Range{d.Position(a), d.Position(b)} }

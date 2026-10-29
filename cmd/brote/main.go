@@ -50,6 +50,9 @@ What a script can reach (the standard library's modules; see docs/capabilities.m
   -deny MODULE     take a module away from whatever the start was; repeatable
   -print-policy    show what the script would be granted and exit
 
+Scripts can run things at the same time: (spawn thunk), channels, (pmap f xs) and
+(with-timeout seconds thunk) are always there (see the language reference).
+
 A script can also (read-file path) into a string and (read-line) from standard
 input, which gives #f once there is no more; neither is there in the REPL.
 
@@ -104,7 +107,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	in := scheme.New(scheme.WithOutput(stdout))
+	in := scheme.New(scheme.WithOutput(stdout), scheme.WithTasks(scheme.TaskLimits{}))
 	rt, err := std.Install(in, pol)
 	if err != nil {
 		fmt.Fprintf(stderr, "brote: %v\n", err)

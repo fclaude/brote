@@ -142,7 +142,8 @@ type taskObj struct {
 	// val, err and cancelled are set, under rt.mu, before isDone is.
 	val       Value
 	err       error
-	cancelled bool // the task ended because its context was cancelled
+	cancelled bool  // the task ended because its context was cancelled
+	cause     error // and why, when it was
 	isDone    atomic.Bool
 	joiners   []*waiter   // under rt.mu
 	observed  atomic.Bool // someone waited for it
@@ -241,6 +242,9 @@ func (t *taskObj) finish(ctx context.Context, v Value, err error) {
 	}
 	rt.mu.Lock()
 	t.val, t.err, t.cancelled = v, err, cancelled
+	if cancelled {
+		t.cause = context.Cause(ctx)
+	}
 	t.isDone.Store(true)
 	for _, w := range t.joiners {
 		if !w.done {
@@ -294,6 +298,8 @@ func (t *taskObj) wait(c *Call) (Value, error) {
 	switch {
 	case t.err == nil:
 		return t.val, nil
+	case t.cancelled && errors.Is(t.cause, errRootDone):
+		return Value{}, errorf(c.Name, "task %d was cancelled when the evaluation that started it ended; wait for it in that evaluation", t.id)
 	case t.cancelled:
 		return Value{}, errorf(c.Name, "task %d was cancelled", t.id)
 	}

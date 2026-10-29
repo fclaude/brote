@@ -53,7 +53,7 @@ func TestDocExamples(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			in := scheme.New(scheme.WithOutput(&out))
+			in := scheme.New(scheme.WithOutput(&out), scheme.WithTasks(scheme.TaskLimits{}))
 			rt, err := std.Install(in, std.Full())
 			if err != nil {
 				t.Fatal(err)
