@@ -321,9 +321,34 @@ Available when the host gives the interpreter tasks (`scheme.WithTasks`; the `br
 | `(current-task)` | the task running this call |
 | `(task? x)` | |
 
+Channels carry values between tasks:
+
+| | |
+|---|---|
+| `(make-channel)` `(make-channel n)` | a channel. With no argument it is unbuffered: a send waits for a receive. With `n` it holds up to `n` values before a send waits |
+| `(channel-send! ch v)` | send `v`, waiting until a receiver or buffer room takes it. Raises an error if the channel is closed |
+| `(channel-recv ch)` `(channel-recv ch eof)` | receive a value, waiting for one. From a closed, empty channel it raises an error, or returns `eof` if one was given |
+| `(channel-try-recv ch fallback)` | a ready value, else `fallback`; never waits |
+| `(channel-close! ch)` | close it: receivers still get what it holds, then find it closed, and every task waiting on it wakes. Closing twice is an error |
+| `(channel-closed? ch)` `(channel? x)` | |
+| `(channel-for-each f ch)` | call `f` on each value until the channel is closed and empty |
+| `(on-recv ch)` `(on-recv ch eof)` `(on-send ch v)` | cases for `select` |
+| `(select cases)` `(select cases default)` | wait until one case can proceed and do it; `(index . value)`, where `value` is what was received (`#t` for a send). When several can proceed, one is picked at random, so none starves. With `default`, a procedure of no arguments, it never waits: if no case can proceed the result is `(-1 . (default))` |
+| `(after seconds)` | a channel that receives `#t` once, after that long. For timeouts: `(select (list (on-recv work) (on-recv (after 5))))` |
+
+```lisp
+(define jobs (make-channel 8))
+(define results (make-channel 8))
+(define workers
+  (map (lambda (id)
+         (spawn (lambda () (channel-for-each (lambda (n) (channel-send! results (* n n))) jobs))))
+       (iota 4)))
+```
+
 Rules:
 
 - **A task lives no longer than the evaluation that started it.** When the outermost `EvalString`, `Apply` or `LoadFile` returns, tasks still running are cancelled and waited for first. A task that failed and that nothing waited for fails the evaluation instead of being dropped; a script that wants fire-and-forget catches the error inside the thunk.
+- **Deadlock is an error.** When every task is waiting for another (on a channel, or in `task-wait`) and nothing, such as a timer or a task in a host call, can wake any of them, the task that started the evaluation gets `deadlock: all tasks are waiting for one another and none can run`, an ordinary error `guard` can catch, instead of a hang.
 - **An ordinary error in a task** is raised again by `task-wait`, where `guard` can catch it.
 - **Cancellation** cannot be caught by the task it cancels, as with a host's cancelled context. `task-wait` on a cancelled task raises an ordinary error ("task N was cancelled").
 - **A denial from the guard, or a halt, in any task ends the whole evaluation** and cannot be caught by `guard` anywhere, including around `task-wait`. A script cannot hide a refusal by running the refused call in a task.

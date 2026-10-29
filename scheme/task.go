@@ -32,6 +32,9 @@ type task struct {
 	obj  *taskObj
 }
 
+// isRoot reports whether t is the task that started its evaluation.
+func (t *task) isRoot() bool { return t.obj != nil && t.obj.id == 0 }
+
 // taskKey is the context key under which an interpreter keeps the task a
 // context belongs to. It is per interpreter, so a handler that evaluates in
 // a second interpreter with its own context does not borrow the first's task.
@@ -54,7 +57,7 @@ func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done f
 	if in.tasks != nil {
 		var r *root
 		ctx, r = in.tasks.newRoot(ctx)
-		t.root, t.obj = r, &taskObj{id: 0, done: make(chan struct{})}
+		t.root, t.obj = r, &taskObj{id: 0, root: r}
 		done = func(err error) error { return r.leave(err) }
 	}
 	return t, context.WithValue(ctx, taskKey{in}, t), done

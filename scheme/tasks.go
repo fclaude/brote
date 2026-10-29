@@ -33,7 +33,7 @@ func WithTasks(l TaskLimits) Option {
 		if l.MaxDepth <= 0 {
 			l.MaxDepth = 2500
 		}
-		in.tasks = &taskRuntime{limits: l}
+		in.tasks = &taskRuntime{limits: l, parked: map[*waiter]struct{}{}}
 	}
 }
 
@@ -42,6 +42,14 @@ type taskRuntime struct {
 	limits TaskLimits
 	live   atomic.Int64 // spawned tasks alive now
 	ids    atomic.Int64
+
+	// mu guards everything tasks wait on (sync.go): the counts below, every
+	// channel, and each task's list of joiners.
+	mu      sync.Mutex
+	alive   int // tasks that exist: each evaluation's first and every spawned one
+	blocked int // of those, the ones parked waiting for another
+	timers  int // timers that will wake someone
+	parked  map[*waiter]struct{}
 }
 
 // errRootDone is the cause the tasks left running when an evaluation ends are
@@ -58,10 +66,15 @@ type root struct {
 	mu       sync.Mutex
 	fatal    error      // a denial or a halt in some task: it ends the evaluation
 	failures []*taskObj // tasks that failed on their own, in case no one waits for them
+
+	timers []*pendingTimer // under rt.mu
 }
 
 func (rt *taskRuntime) newRoot(ctx context.Context) (context.Context, *root) {
 	ctx, cancel := context.WithCancelCause(ctx)
+	rt.mu.Lock()
+	rt.alive++
+	rt.mu.Unlock()
 	return ctx, &root{rt: rt, cancel: cancel}
 }
 
@@ -73,6 +86,11 @@ func (rt *taskRuntime) newRoot(ctx context.Context) (context.Context, *root) {
 // least wants.
 func (r *root) leave(err error) error {
 	r.cancel(errRootDone)
+	r.rt.mu.Lock()
+	r.rt.alive--
+	r.stopTimers()
+	r.rt.checkDeadlock()
+	r.rt.mu.Unlock()
 	r.wg.Wait()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -120,11 +138,13 @@ type taskObj struct {
 	root *root
 
 	cancel context.CancelCauseFunc
-	done   chan struct{} // closed once val and err are set
 
+	// val, err and cancelled are set, under rt.mu, before isDone is.
 	val       Value
 	err       error
-	cancelled bool        // the task ended because its context was cancelled
+	cancelled bool // the task ended because its context was cancelled
+	isDone    atomic.Bool
+	joiners   []*waiter   // under rt.mu
 	observed  atomic.Bool // someone waited for it
 }
 
@@ -136,14 +156,7 @@ func (t *taskObj) String() string {
 	return fmt.Sprintf("#<task %d>", t.id)
 }
 
-func (t *taskObj) finished() bool {
-	select {
-	case <-t.done:
-		return true
-	default:
-		return false
-	}
-}
+func (t *taskObj) finished() bool { return t.isDone.Load() }
 
 // unobserved is the error an evaluation returns for a task that failed and
 // that no one waited for.
@@ -163,9 +176,12 @@ func (in *Interp) spawn(c *Call, thunk Value) (Value, error) {
 		return Value{}, errorf(c.Name, "too many tasks: the limit is %d alive at once", rt.limits.MaxTasks)
 	}
 	ctx, cancel := context.WithCancelCause(c.Ctx)
-	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, done: make(chan struct{})}
+	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel}
 	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
 	ctx = context.WithValue(ctx, taskKey{in}, t)
+	rt.mu.Lock()
+	rt.alive++
+	rt.mu.Unlock()
 	r.wg.Add(1)
 	go in.runTask(ctx, t, obj, thunk)
 	return ObjectValue(obj), nil
@@ -186,31 +202,57 @@ func (in *Interp) runTask(ctx context.Context, t *task, obj *taskObj, thunk Valu
 }
 
 func (t *taskObj) finish(ctx context.Context, v Value, err error) {
-	r := t.root
-	t.val, t.err = v, err
+	r, rt := t.root, t.root.rt
+	cancelled := err != nil && ctx.Err() != nil
 	if err != nil {
 		// A task whose context was cancelled was stopped, not broken: its
 		// error is the cancellation's, however a handler spelled it.
-		t.cancelled = ctx.Err() != nil
 		switch {
 		case isFatal(err):
 			r.setFatal(err)
-		case !t.cancelled:
+		case !cancelled:
 			r.noteFailure(t)
 		}
 	}
-	close(t.done)
+	rt.mu.Lock()
+	t.val, t.err, t.cancelled = v, err, cancelled
+	t.isDone.Store(true)
+	for _, w := range t.joiners {
+		if !w.done {
+			rt.fire(w, 0, Value{}, true, nil)
+		}
+	}
+	t.joiners = nil
+	rt.alive--
+	rt.checkDeadlock()
+	rt.mu.Unlock()
 	t.cancel(nil)
-	r.rt.live.Add(-1)
+	rt.live.Add(-1)
 	r.wg.Done()
 }
 
-// wait blocks until t is finished or ctx is done, and returns t's outcome.
+// wait blocks until t is finished, or ctx is done or nothing can run, and
+// returns t's outcome.
 func (t *taskObj) wait(c *Call) (Value, error) {
-	select {
-	case <-t.done:
-	case <-c.Ctx.Done():
-		return Value{}, wrap(c.Name, c.Ctx.Err())
+	rt := t.root.rt
+	rt.mu.Lock()
+	if !t.isDone.Load() {
+		w := newWaiter(c.t)
+		t.joiners = append(t.joiners, w)
+		rt.park(c.Ctx, w)
+		rt.mu.Lock()
+		for i, x := range t.joiners {
+			if x == w {
+				t.joiners = append(t.joiners[:i], t.joiners[i+1:]...)
+				break
+			}
+		}
+		rt.mu.Unlock()
+		if w.err != nil {
+			return Value{}, ctxOrDeadlock(c, w.err)
+		}
+	} else {
+		rt.mu.Unlock()
 	}
 	t.observed.Store(true)
 	switch {
