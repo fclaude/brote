@@ -147,10 +147,167 @@ It is your statement that your handlers are safe to call from several goroutines
 
 - **The gate.** `Gate.Before` is called one call at a time, whatever the tasks do, so a gate written for one goroutine, including one that stops to ask the person, needs no change. A task waiting its turn still stops with its context. A gate that is safe to call concurrently says so by implementing `scheme.ConcurrentGate` (an extra method, `ConcurrentSafe()`), and is then called without the lock.
 - **Origin and context.** A task's context is derived from its spawner's, so it has the same `Origin` and is cancelled with it. `Call.Ctx` is the calling task's context: a handler that honours it stops when its task is cancelled or its `with-timeout` ends, as `http-request`, `proc-run` and `time-sleep` do.
-- **Lifetime.** Tasks belong to the evaluation that started them, the outermost `EvalString`, `Apply` or `Eval`. When it returns, tasks still running are cancelled and waited for. A task that failed and that nothing waited for fails the evaluation. A denial or a halt in any task ends the evaluation, whatever the script does with it.
+- **Lifetime.** Tasks belong to the evaluation that started them, the outermost `EvalString`, `Apply` or `Eval`. When it returns, tasks still running are cancelled and waited for. A task that failed and that nothing waited for fails the evaluation. A denial or a halt in any task ends the evaluation, whatever the script does with it. The exception is a *detached* task, which a host grants separately ([below](#detached-tasks)).
 - **Limits.** `MaxTasks` (default 256) bounds the tasks alive at once, across evaluations, and `spawn` past it raises an error. `MaxDepth` (default 2,500) is the nesting limit inside a spawned task; the task that started the evaluation keeps `scheme.MaxDepth`. A task is a goroutine and its stack, so these two bound what tasks can cost.
-- **Several evaluations at once.** Each call into the interpreter from outside is its own evaluation with its own tasks. Deadlock detection assumes the tasks of the interpreter are the only things that wake each other: a task waiting on a channel that a *different* evaluation will send to later looks deadlocked when every task is waiting.
+- **Several evaluations at once.** Each call into the interpreter from outside is its own evaluation with its own tasks. Deadlock detection assumes the tasks of the interpreter are the only things that wake each other: a task waiting on a channel that a *different* evaluation will send to later looks deadlocked when every task is waiting. A channel the *host* sends to is declared with `scheme.HostFed()`, [below](#host-fed-channels-and-timers).
 - **Audit.** `std.WithAudit`'s callback is called one event at a time.
+
+### Detached tasks
+
+Coigüe-style hosts run Scheme in short synchronous commands on their UI goroutine and want work that continues after the command returns. That is a second grant:
+
+```go
+in := scheme.New(
+    scheme.WithTasks(scheme.TaskLimits{MaxTasks: 64, Background: true}),
+    scheme.WithTaskFailed(func(t scheme.Task, err error) { /* tell the user */ }),
+)
+defer in.Shutdown(ctx)
+```
+
+With `Background`, scripts get `(spawn-detached thunk)` and `(after-detached seconds)`. A detached task belongs to the interpreter, not to an evaluation:
+
+- **Its handle works from later evaluations**: `task-wait`, `task-done?` and `task-cancel!` on it from a command that did not start it all work.
+- **It counts against `MaxTasks`**, like any task, and has the same `MaxDepth`.
+- **Its context descends from the spawner's by value, not by cancellation.** Everything the host put in the context of the evaluation that spawned it (`Origin`, which module's code is running, ...) is visible to its handlers through `Call.Ctx`, but ending the evaluation, or cancelling its context, or its `with-timeout`, does not end the task. It ends when it finishes, when a script `task-cancel!`s it, or at `Shutdown`.
+- **It is its own evaluation inside.** Tasks it spawns with `spawn`, `pmap` and the rest end with it, and a denial or a halt in one of them is the detached task's error.
+- **A failure no one waited for does not fail some unrelated later evaluation.** It goes to `WithTaskFailed`, called on the failed task's own goroutine, after the task has finished and outside every lock of the interpreter. The error may be a `*scheme.Denied`: that is how a host hears of a refused call made in the background. The hook is *not* called for a task that was cancelled (it did not fail), or when something was waiting for the task at the moment it failed (that wait gets the error). A `task-wait` made later on the finished task still gets the error; the hook was told once, when it happened. Keep the hook short and do not call `Shutdown` from it, which waits for it.
+- **`Shutdown(ctx)` cancels every detached task and waits for them**, for as long as `ctx` allows, and returns `ctx`'s error if some are still running then (a handler that ignores its context can do that; the message says how many). It also stops the detached timers, closing their channels so nothing waits forever. It can be called more than once and from any goroutine. From its first call `spawn-detached` and `after-detached` are refused; evaluations otherwise go on. Without `Background` it does nothing.
+- **A deadlock is the evaluation's, never a detached task's.** A detached task parked on a channel is waiting for the outside, which may be a later evaluation or the host, so it is neither reported as deadlocked nor killed when an evaluation's deadlock is. While one is running (not parked) an evaluation that waits for it is not deadlocked either, as for any task in a host call.
+
+### Go handles for tasks and channels
+
+`scheme.AsTask(v)` and `scheme.AsChannel(v)` return small interfaces for a value a script handed you, so a host does not have to apply Scheme primitives to look at them. Every method is safe from any goroutine, and none takes part in deadlock detection: a host is not a task, so using these never makes a script's wait look deadlocked, and never hides one that is.
+
+```go
+type Task interface {
+    Value() Value                  // to hand back to a script
+    Done() <-chan struct{}         // closed when it has finished
+    Result() (Value, error)        // after Done; ErrTaskRunning before
+    Cancel()
+}
+
+type Channel interface {
+    Value() Value
+    TrySend(v Value) (sent bool, err error) // never waits; an error means closed
+    TryRecv() (v Value, ok, closed bool)    // ok: a value; closed: closed and drained; neither: nothing ready
+    Recv(ctx context.Context) (v Value, ok bool, err error) // waits for the channel, and stops with ctx
+    Close()                                 // idempotent
+    Closed() bool
+    SetHostFed(bool)
+}
+
+ch, err := scheme.NewChannel(in, 8, scheme.HostFed()) // the interpreter needs WithTasks
+in.Global().Define("inbox", ch.Value())
+```
+
+`Result` of a task that was cancelled is an error for which `errors.Is(err, context.Canceled)` holds. A task that has ended is "done" for `Done` and `task-done?` alike; so is the task that started an evaluation, once the evaluation returns. `TrySend` on a channel with no buffer succeeds only if a receiver is parked, so give a channel the host sends to some capacity. A value passes through unchanged, `Taint` included: a channel does not launder provenance, whichever side sends.
+
+### Host-fed channels and timers
+
+A script that waits on a channel nobody inside the interpreter will send to, while nothing else is running, gets `deadlock: all tasks are waiting for one another and none can run`. When the sender is the host, that is a false alarm, and the channel says so: `scheme.NewChannel(in, n, scheme.HostFed())`, or `ch.SetHostFed(true)` on one a script made (it applies to tasks that wait afterwards). A task waiting on a host-fed channel, alone or in a `select`, is not counted as deadlocked, and does not make the others look deadlocked either: it can be woken from outside. It still stops with its context and with `task-cancel!`. The cost is that a wait on that channel nobody ever answers lasts until the context ends, so give such an evaluation a context with a deadline.
+
+**Timers.** `(after secs)` belongs to the evaluation that made it: it is cancelled when the evaluation returns, so a channel from one evaluation never fires for a later one (this was measured on v0.5.0 and is the documented behaviour). `(after-detached secs)` is the interpreter's: it fires whoever holds the channel, after the evaluation is gone, and a task waiting on it is not a deadlock. After it has fired it is an ordinary channel, and `Shutdown` closes the ones still pending. It is what a detached task `select`s on for a timeout.
+
+### Context values reach every task
+
+**Guarantee.** A value the host puts in the context passed to `EvalString`, `Apply` or `Eval` is visible through `Call.Ctx` (and `ctx.Value`) to every primitive called, at any depth, beneath that evaluation: in the evaluation's own task, in `spawn`, `group-spawn`, `pmap`, `pmap-limit`, `pfor-each` and `race` tasks (workers included), in a `with-timeout` body, in callbacks that go through `Apply` (`map`, `sort`, `swap!`, `with-lock`), and in `spawn-detached` tasks and everything those start, even when the task outlives the evaluation and is waited for by one with different values. A detached task keeps the values of the evaluation that spawned it, not of the one that waits for it. Concurrent evaluations with different values never see each other's. `TestTheHostsContextValueIsVisibleInEveryKindOfTask` and `TestContextValuesDoNotCrossBetweenEvaluations` pin it.
+
+What is *not* promised: a context you build inside a handler and pass to `Apply` instead of `Call.Ctx` starts a new evaluation and carries only what you put in it. Pass `Call.Ctx` on.
+
+### Reading the interpreter from other goroutines
+
+These two are confirmed by tests, and hold with `WithTasks` on:
+
+- **A closure applied on one goroutine while another evaluation runs on the same `Interp`** is safe, including `Env.Define`, `Snapshot` and `Restore` on a module's environment (an `Env` you made with `scheme.NewEnv(in.Global())`) at the same time and detached tasks running. A host can therefore run one editor "transaction" at a time while detached tasks go on. Each operation is atomic; a transaction that wants all-or-nothing takes a `Snapshot` first and `Restore`s on failure, as always. `TestClosuresAndModuleEnvironmentsAreSafeWhileOtherEvaluationsRun`.
+- **A `Gate` that implements `ConcurrentGate` is called without the interpreter's lock**: two calls can be inside it at the same moment, and one that does not implement it is never called twice at once. `TestAConcurrentGateIsCalledWithoutTheInterpretersLock`.
+
+### Migration note: the Coigüe pattern
+
+v0.5.0 hosts that wanted work after a command returned polled with `(channel-try-recv ch sentinel)` from a script, made channels with `(make-channel 1)`, and could not ask a task whether it was done without applying Scheme. From v0.6.0 the host owns the loop and turns every asynchronous thing into a callback that runs as a *new command*:
+
+1. Grant `Background`, set `WithTaskFailed`, and call `Shutdown` when the editor closes.
+2. Register primitives that hand a task or a channel to the loop together with a handler procedure: `(on-done task handler)`, `(on-message channel handler)`. They use `AsTask` and `AsChannel`.
+3. The loop watches each with its own goroutine, `select`ing on `Task.Done()` or looping on `Channel.Recv(ctx)`, and **posts** a function to the UI goroutine. Nothing waits on Scheme there.
+4. The UI goroutine runs posted functions one at a time; each is one short synchronous command (`Apply` the handler with the result). Failures arrive the same way, from the hook.
+5. Channels the host sends to are `HostFed`; use `after-detached` for timers a detached task selects on.
+
+```go
+type Loop struct {
+    in     *scheme.Interp
+    events chan func()   // run on the UI goroutine, one at a time
+    quit   chan struct{} // closed by Close
+    wg     sync.WaitGroup
+}
+
+func (l *Loop) post(f func()) {
+    select {
+    case l.events <- f:
+    case <-l.quit:
+    }
+}
+
+// onDone is the Go side of (on-done task handler).
+func (l *Loop) onDone(tk scheme.Task, handler scheme.Value) {
+    l.wg.Add(1)
+    go func() {
+        defer l.wg.Done()
+        select {
+        case <-tk.Done():
+            if v, err := tk.Result(); err == nil {
+                l.post(func() { l.in.Apply(context.Background(), handler, []scheme.Value{v}) })
+            } // else: WithTaskFailed has it, if nobody was waiting
+        case <-l.quit:
+        }
+    }()
+}
+
+// onMessage is the Go side of (on-message channel handler).
+func (l *Loop) onMessage(ch scheme.Channel, handler scheme.Value) {
+    l.wg.Add(1)
+    go func() {
+        defer l.wg.Done()
+        ctx, cancel := context.WithCancel(context.Background())
+        defer cancel()
+        go func() { <-l.quit; cancel() }()
+        for {
+            v, ok, err := ch.Recv(ctx)
+            if err != nil || !ok { // stopped, or the channel was closed
+                return
+            }
+            l.post(func() { l.in.Apply(context.Background(), handler, []scheme.Value{v}) })
+        }
+    }()
+}
+
+// UI goroutine:  for f := range l.events { f() }
+// On exit:       close(l.quit); in.Shutdown(ctx); l.wg.Wait()
+```
+
+`TestTheEventLoopPatternOfTheMigrationNote` runs this shape end to end. Two things to carry over from the old polling code: the handler is applied on a context of the host's choosing, so put the per-module value (the Gate reads it) in that context when you `Apply`; and the work itself, in the detached task, runs under the context values captured at `spawn-detached`.
+
+### Different policies for different callers
+
+`std.Install` enforces one `Policy` per interpreter inside the primitives. A host that runs several modules, each with its own grant (`(requires (net (allow "api.example.com") (methods get)))`), installs the widest policy any of them may have and narrows it per call in its own `Gate`, using the calling module's `*std.Policy`:
+
+```go
+func (g *myGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+    caller := policyOf(ctx) // from the value Coigüe put in the context
+    if m := g.rt.ModuleOf(p.Name); m != "" && !caller.Has(m) {
+        return &scheme.Denied{Prim: p.Name, Reason: "this module has not been granted " + m}
+    }
+    switch p.Name {
+    case "http-request":
+        if err := caller.CheckNet(args[0].S, args[1].S); err != nil {
+            return &scheme.Denied{Prim: p.Name, Reason: err.Error()}
+        }
+    case "proc-run":
+        // CheckExec(argv[0])
+    }
+    return nil
+}
+```
+
+`(*Policy).CheckNet(method, rawURL)` and `CheckExec(name)` return an error written for a person ("net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)") and make the same decision the installed procedures do. The installed policy stays the outer limit, so a check that is too loose cannot reach past it. `Runtime.ModuleOf(procedureName)` names the module a procedure came from. **There is no `CheckFS`**: the file system's containment is the operating system's (`os.Root`, which refuses a symbolic link out of the tree), and a check that only reads the path would let a link inside one module's tree lead into another's. For different file trees install different interpreters. `TestAPolicyPerCallerAllowsOneAndDeniesAnother` is the example, running against a real server.
 
 ## Cancellation and limits
 
@@ -267,3 +424,13 @@ Nodwyn's imports, so it waits for a minor version.
 | Registration ends at `Freeze` | `TestFreezeEndsRegistration` |
 | An unsaid origin is not the user's | `TestAnUnsaidOriginIsNotTheUsers`, `TestOriginDefaultsToNotTheUser` |
 | One interpreter may be used from several goroutines | `scheme/concurrent_test.go`, under `-race` |
+| A detached task outlives its evaluation and is awaited from the next | `TestADetachedTaskOutlivesItsEvaluationAndIsAwaitedFromTheNext` (`scheme/background_test.go`) |
+| `Shutdown` cancels detached tasks, waits, and is bounded by its context | `TestShutdownCancelsEveryDetachedTaskAndWaits`, `TestShutdownIsBoundedByItsContext`, `TestShutdownRacesWithSpawning` |
+| An unobserved detached failure goes to the host hook, not to an evaluation | `TestAnUnobservedDetachedFailureGoesToTheHostHook`, `TestAFailureSomeoneIsWaitingForIsTheWaitersAndNotTheHosts` |
+| Go handles for channels and tasks, from several goroutines | `TestChannelFromManyGoroutines`, `TestChannelContract`, `TestTaskFromManyGoroutines` |
+| A host-fed channel is not a deadlock; the host waiting does not hide one | `TestAHostFedChannelIsNotADeadlock`, `TestTheHostWaitingDoesNotHideAScriptsDeadlock` |
+| A detached timer survives its evaluation | `TestADetachedTimerFiresForALaterEvaluation` |
+| Context values reach every kind of task | `TestTheHostsContextValueIsVisibleInEveryKindOfTask`, `TestContextValuesDoNotCrossBetweenEvaluations` |
+| Closures, module environments and `ConcurrentGate` under concurrency | `TestClosuresAndModuleEnvironmentsAreSafeWhileOtherEvaluationsRun`, `TestAConcurrentGateIsCalledWithoutTheInterpretersLock` |
+| The event-loop pattern | `TestTheEventLoopPatternOfTheMigrationNote` |
+| A policy per caller | `TestAPolicyPerCallerAllowsOneAndDeniesAnother`, `TestCheckNetAgreesWithTheInstalledPolicy`, `TestCheckExec` (`std/check_test.go`) |

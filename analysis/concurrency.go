@@ -20,12 +20,13 @@ const warning = 2
 // task, which arguments are the procedures that run (counting the operator as
 // argument 0). race takes a list of them.
 var taskThunks = map[string][]int{
-	"spawn":       {1},
-	"group-spawn": {2},
-	"pmap":        {1},
-	"pmap-limit":  {2},
-	"pfor-each":   {1},
-	"race":        {1},
+	"spawn":          {1},
+	"spawn-detached": {1},
+	"group-spawn":    {2},
+	"pmap":           {1},
+	"pmap-limit":     {2},
+	"pfor-each":      {1},
+	"race":           {1},
 }
 
 // waits are the calls that wait for another task.

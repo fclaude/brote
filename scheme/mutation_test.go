@@ -177,3 +177,19 @@ func TestNestedQuasiquote(t *testing.T) {
 		t.Errorf("error = %v, want one about unquote-splicing", err)
 	}
 }
+
+func TestPairsAreNotChangedWhileADetachedTaskIsAlive(t *testing.T) {
+	in := New(WithTasks(TaskLimits{Background: true}))
+	defer in.Shutdown(context.Background())
+	if _, err := in.EvalString(context.Background(), `
+(define p (list 1 2))
+(define ch (make-channel))
+(spawn-detached (lambda () (channel-receive ch)))`); err != nil {
+		t.Fatal(err)
+	}
+	// The detached task outlived that evaluation; this one is not alone.
+	_, err := in.EvalString(context.Background(), `(set-car! p 'x)`)
+	if err == nil || !strings.Contains(err.Error(), "task") {
+		t.Fatalf("error = %v, want one about a task being alive", err)
+	}
+}

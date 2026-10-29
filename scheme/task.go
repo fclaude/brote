@@ -59,11 +59,12 @@ func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done f
 	var r *root
 	if in.tasks != nil {
 		ctx, r = in.tasks.newRoot(ctx)
-		t.root, t.obj = r, &taskObj{id: 0, root: r}
+		t.root, t.obj = r, &taskObj{id: 0, root: r, done: make(chan struct{})}
 	}
 	done = func(err error) error {
 		if r != nil {
 			err = r.leave(err)
+			t.obj.endMain()
 		}
 		in.quiesce.Lock()
 		in.running--

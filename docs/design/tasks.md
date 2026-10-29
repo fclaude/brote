@@ -239,7 +239,8 @@ are safe to call from several goroutines.
 - **Long-lived tasks.** Draining at the end of a root forbids a task that outlives
   its command, which an editor host such as Coigüe may want. A second grant,
   `TaskLimits.Background`, adds `(spawn-detached thunk)`, owned by the
-  interpreter and cancelled by `in.Shutdown(ctx)`.
+  interpreter and cancelled by `in.Shutdown(ctx)`. Built in 0.6.0; see
+  [Detached tasks](#detached-tasks).
 
 ## Implementation
 
@@ -377,8 +378,8 @@ Where it differs:
   `KObject`, held in the existing `Handle` field so `Value` did not grow.
 - **The tasks of an evaluation end with it, and the error says so** when a later
   evaluation waits for one. The REPL treats each line as an evaluation, so tasks
-  and their waiting go in one expression there. A `Background` grant for
-  tasks that outlive a call (open question 2) is not built.
+  and their waiting go in one expression there. The `Background` grant for
+  tasks that outlive a call is [built in 0.6.0](#detached-tasks).
 - **Diagnostics** are in `analysis/concurrency.go`: shared `set!` from a task,
   waiting while holding a lock, and effects in a `swap!` or `hash-update!`
   procedure.
@@ -403,6 +404,28 @@ The 4× target for 16 goroutines is not met: collection and memory bandwidth
 still limit it. What is left is `Value` itself (about 112 bytes, copied
 everywhere), the argument slice each application makes, and the `Call` each
 primitive call allocates.
+
+## Detached tasks
+
+Added in 0.6.0 for hosts that run Scheme in short synchronous commands (an editor's UI goroutine) and need work to continue after a command returns. The memory-safety rule is unchanged: nothing here adds a way to share memory unsafely or a second door around the gate.
+
+**Ownership.** A detached task has its own `root`, so everything an evaluation's root does for its tasks (waiting for the ones it spawns, cancelling them when it ends, turning a denial in one of them into its own error) a detached task does for its children. The difference is who ends it: the interpreter, not a caller. `taskRuntime` keeps the live set and a `WaitGroup`; `Shutdown` sets a flag under the same mutex that `spawn-detached` takes to register (so no task is added after `Wait` starts), cancels every one with a cause that is a cancellation, and waits bounded by the context.
+
+**Context.** `context.WithoutCancel(spawner)` keeps the values (origin, whatever the host attached) and drops cancellation and deadline, then a fresh cancel is layered on. Nothing is merged by hand, and no goroutine is spent per task to forward cancellation.
+
+**Failure.** The root's "a failure no one waited for fails the evaluation" rule has no evaluation to fail. A failure of a detached task goes to `WithTaskFailed`, unless the task was cancelled (not a failure) or something was parked in `task-wait` on it at that moment (it will get the error). The decision is made under the runtime mutex, where the joiners are read, so a waiter is either seen or has not started waiting. Open question 1's "loud default" stays loud for ordinary tasks, because they have an evaluation to be loud in.
+
+**Counting.** A detached task is `alive` for deadlock purposes from before it starts until the same critical section that publishes its result and wakes its joiners, so a task waiting for it cannot see a moment when it is neither running nor finished. It counts against `MaxTasks`.
+
+**Deadlock and the outside.** The detector assumed only tasks wake tasks. Detached tasks and the host break that:
+
+- a detached task is never woken *with* the deadlock error (only an evaluation's first task is), so one parked on a channel survives another evaluation's deadlock; and
+- a waiter on a **host-fed** channel is not counted as blocked at all, since the host can wake it. Without it, every evaluation that waits for the host would be reported as deadlocked. A host-fed channel is a property the host sets (`scheme.HostFed()`, `SetHostFed`), not a script's: a script that could set it would only be removing its own deadlock detection.
+- a host receiving with `Channel.Recv` is a waiter with no task: not counted, so it neither causes nor hides a deadlock.
+
+`(after-detached)` is a channel that is host-fed until its timer fires: the timer is the "outside" that will wake the waiter. It does not use the per-evaluation timer count, which would disable deadlock detection for every evaluation for as long as the timer is pending.
+
+**Not done, deliberately.** `CheckFS` (see [std.md](../std.md#one-interpreter-different-grants)); a `Background` default for the `brote` command, since a command-line run that ends would need a `Shutdown` it does not have a place for; reporting a deadlock *among* detached tasks, which are by definition waiting for the outside.
 
 ## Order of work
 

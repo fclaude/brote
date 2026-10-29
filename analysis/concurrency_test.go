@@ -20,6 +20,7 @@ func TestWarnsOnSharedWritesFromATask(t *testing.T) {
 		"global read-modify-write": {`(define n 0) (spawn (lambda () (set! n (+ n 1))))`, "n is read and then set!"},
 		"global plain write":       {`(define flag #f) (pfor-each (lambda (x) (set! flag x)) '(1 2))`, "flag is set! from a task"},
 		"captured local":           {`(define (count xs) (let ((total 0)) (pfor-each (lambda (x) (set! total (+ total x))) xs) total))`, "total is read and then set!"},
+		"in a detached task":       {`(define n 0) (spawn-detached (lambda () (set! n (+ n 1))))`, "n is read and then set!"},
 		"in a group":               {`(define n 0) (task-group (lambda (g) (group-spawn g (lambda () (set! n 1)))))`, "n is set! from a task"},
 		"in pmap-limit":            {`(define n 0) (pmap-limit 4 (lambda (x) (set! n x)) '(1 2))`, "n is set! from a task"},
 		"in race":                  {`(define n 0) (race (list (lambda () (set! n 1)) (lambda () 2)))`, "n is set! from a task"},
