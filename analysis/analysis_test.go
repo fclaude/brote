@@ -117,3 +117,29 @@ func FuzzAnalyze(f *testing.F) {
 		}
 	})
 }
+
+func TestMacroDefinitionsAreNavigable(t *testing.T) {
+	src := "(define-syntax swap!\n  (syntax-rules ()\n    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))\n(swap! x y)\n"
+	d := Analyze(src, Profile{})
+	var def *Definition
+	for _, x := range d.Definitions {
+		if x.Name == "swap!" {
+			def = x
+		}
+	}
+	if def == nil {
+		t.Fatalf("no definition of swap!: %+v", d.Definitions)
+	}
+	if got := d.DefinitionAt(Position{Line: 3, Character: 2}); got != def {
+		t.Errorf("the use of swap! does not lead to its definition: %v", got)
+	}
+	// The pattern variables of the rules are not names in the program.
+	for _, r := range d.References {
+		if r.Name == "tmp" || r.Name == "a" {
+			t.Errorf("a template name was treated as a reference: %+v", r)
+		}
+	}
+	if len(d.Diagnostics) != 0 {
+		t.Errorf("diagnostics: %+v", d.Diagnostics)
+	}
+}

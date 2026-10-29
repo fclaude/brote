@@ -25,6 +25,7 @@ var specialForms = []string{
 	"quote", "quasiquote", "unquote", "unquote-splicing",
 	"cond", "case", "else", "=>", "and", "or",
 	"do", "when", "unless", "guard", "with-output-to-string",
+	"define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
 }
 
 // Interp is one interpreter instance: a global environment, the primitive
@@ -505,6 +506,20 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 			case "guard":
 				return in.evalGuard(t, ctx, form, env)
 
+			case "define-syntax":
+				return in.evalDefineSyntax(form, env)
+
+			case "let-syntax", "letrec-syntax":
+				nx, nenv, err := in.evalLetSyntax(head.S, form, env)
+				if err != nil {
+					return Value{}, err
+				}
+				x, env = nx, nenv
+				continue
+
+			case "syntax-rules":
+				return Value{}, errorf("syntax-rules", "only valid in (define-syntax name (syntax-rules …))")
+
 			case "with-output-to-string":
 				if len(form) == 0 {
 					return Value{}, errorf("with-output-to-string", "expected a body expression")
@@ -574,8 +589,24 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 		if err := ctx.Err(); err != nil {
 			return Value{}, wrap("eval", err)
 		}
-		f, err := in.eval(t, ctx, head, env)
-		if err != nil {
+		var f Value
+		var err error
+		if head.Kind == KSymbol {
+			var ok bool
+			if f, ok = env.Lookup(head.S); !ok {
+				return Value{}, errorf("eval", "unbound variable: %s", head.S)
+			}
+			if f.Kind == KObject {
+				if m := macroOf(f); m != nil {
+					nx, err := in.expandUse(m, x)
+					if err != nil {
+						return Value{}, err
+					}
+					x = nx
+					continue
+				}
+			}
+		} else if f, err = in.eval(t, ctx, head, env); err != nil {
 			return Value{}, err
 		}
 		argForms, ok := x.P.argSlice()

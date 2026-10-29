@@ -146,6 +146,16 @@ type Pair struct {
 	// args is Cdr as a slice, kept by the evaluator for a pair that is code.
 	// Pairs are immutable, so it never goes stale.
 	args atomic.Pointer[argList]
+
+	// expansion is what the form expanded to, if it is a use of a macro.
+	expansion atomic.Pointer[expansion]
+}
+
+// expansion is the result of expanding a macro use, and the macro that made it:
+// if the name now means another macro, it is not the answer.
+type expansion struct {
+	m   *macro
+	out Value
 }
 
 // argList is the cdr of a form as a slice, and whether it was a proper list.

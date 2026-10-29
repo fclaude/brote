@@ -141,6 +141,9 @@ already does.
 | `(unless test e …)` | `e …` only if `test` is false; yields void otherwise |
 | `(guard (var clause …) body …)` | evaluate `body …`; if it raises a Scheme error, bind `var` to the condition (an alist `((message . "text") (irritants …) (where . "file:line:col") (trace "in f (file:line:col)" …))`; the last two are there when the failing form was read from text) and try the clauses like `cond` (`(test body …)`, `(test => proc)`, `(else …)`). The first true clause's value is the value of `guard`; no match re-raises. A guard **denial** and a **cancellation** are never catchable |
 | `(with-output-to-string e …)` | evaluate `e …` with `display`/`write`/`newline` captured; return the captured text (a minimal string port) |
+| `(define-syntax name (syntax-rules (literal …) (pattern template) …))` | bind `name` to a macro (see Macros below) |
+| `(let-syntax ((name (syntax-rules …)) …) body …)` `(letrec-syntax …)` | macros known in `body` only. The two are the same: a macro may use the others |
+| `(syntax-rules …)` | the rules of a macro; an error anywhere but in `define-syntax`, `let-syntax` and `letrec-syntax` |
 | `(begin e …)` | evaluate in order, yield the last |
 | `(set! name expr)` | assign an **existing** binding; error if unbound |
 | `(quote d)` | the datum itself |
@@ -152,6 +155,42 @@ already does.
 `define` inside a `lambda` body binds in that call's environment (internal
 definitions). When `define` names a fresh anonymous closure, the closure takes
 that name for printing and error messages.
+
+### Macros
+
+`(define-syntax name (syntax-rules (literal …) (pattern template) …))` binds
+`name` to a macro. The form is evaluated as it is met: when the head of a form
+is a macro, the form is matched against the patterns in order, the template of
+the first that fits replaces the form (with the pattern's variables filled
+in), and the result is evaluated in the form's place and position, so a macro
+that expands to a tail call keeps it a tail call. The result is kept with the
+form, so a macro used in a loop expands once.
+
+- A pattern is a list whose first element (the keyword) is ignored. A name in
+  it matches any form; `_` matches any form and binds nothing; a name listed
+  as a `literal` matches only that name; other data match by `equal?`. A
+  pattern may be dotted, and a vector pattern matches a vector.
+- `p ...` after a pattern matches zero or more forms, and may be followed by
+  more patterns (`(_ a ... last)`). Variables under it are used in the
+  template with the same number of `...`, and `x ... ...` flattens two levels.
+  `(... ...)` in a template is a plain `...`, for a macro that defines
+  macros. `(syntax-rules ::: (literal …) …)` names another ellipsis.
+- No pattern matching is an error that names the macro and shows the form.
+- A macro is a value in the environment, found by name when the form is
+  evaluated, like a procedure. A variable of the same name hides it where it is
+  bound, a `define-syntax` in a body is local to the body, and one used before
+  its `define-syntax` has run is an unbound variable. A special form's name
+  cannot be redefined. `procedure?` is false for a macro, and passing one to
+  `map` is an error.
+- **Hygiene.** Macros are not fully hygienic. A name a template binds, with
+  `let`, `let*`, `letrec`, named `let`, `lambda` or `do`, is renamed for each
+  use, so `(swap! tmp other)` works when the template has its own `tmp`. A name a
+  template only refers to means what it means where the macro is *used*, so a
+  use that rebinds `list` locally changes the `list` in the expansion. A name
+  that a template `define`s keeps its spelling, so a macro can define things.
+  Inside `quote` names keep their spelling too.
+- Macros only rewrite code. What an expansion does still goes through the
+  gate, and a host cannot be asked to do more because a macro wrote the call.
 
 ## 4. Errors
 
@@ -607,10 +646,10 @@ primitive, writing a gate) is in [embedding.md](embedding.md).
 Deliberately absent.
 
 - characters and the full string-port API (only `with-output-to-string`)
-- `define-macro`, which the prelude does not need
+- `define-macro` and other macro systems than `syntax-rules`
 - `set-car!` / `set-cdr!` and string mutation
 - nested quasiquote
-- hygienic macros (`define-syntax`, `syntax-rules`)
+- full hygiene for macros (names a template refers to are not protected from a use's bindings; see Macros)
 - `call/cc`, `dynamic-wind`
 - an `eval` primitive: the kernel surface is not exposed to programs
 - exact rationals and bignums

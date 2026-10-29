@@ -186,6 +186,29 @@ tick 1
 tick 2
 ```
 
+## Your own syntax
+
+There's no `while` in the language, but you can add one. `define-syntax` with `syntax-rules` says what a new form looks like (the pattern) and what it stands for (the template). The `...` after a name means "any number of these", in the pattern and again in the template:
+
+<!-- run -->
+```lisp
+(define-syntax while
+  (syntax-rules ()
+    ((_ test body ...)
+     (let loop () (when test body ... (loop))))))
+(define n 3)
+(while (> n 0)
+  (display n)
+  (set! n (- n 1)))
+(newline)
+```
+
+```text
+321
+```
+
+The new form is replaced by its template before it runs, so `while` costs nothing extra and its body is still in tail position. A name the template binds, like `loop`, is renamed for each use, so it can't clash with a name in your code. The [reference](scheme.md#macros) says what patterns can do.
+
 ## When something goes wrong
 
 An error that nothing catches stops the program. The REPL prints it and gives you the prompt back:

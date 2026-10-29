@@ -305,6 +305,10 @@ func (w walker) predefine(nodes []*scheme.Syntax, s *scope) {
 		if head(n) == "begin" {
 			w.predefine(n.Children[1:], s)
 		}
+		if head(n) == "define-syntax" && len(n.Children) >= 2 {
+			w.bind(n.Children[1], s, true)
+			continue
+		}
 		if head(n) != "define" || len(n.Children) < 2 {
 			continue
 		}
@@ -389,6 +393,25 @@ func (w walker) walk(n *scheme.Syntax, s *scope) {
 			w.ref(target, s)
 			w.body(c[2:], s)
 		}
+		return
+	case "define-syntax":
+		// The rules are patterns and templates, not code to look names up in.
+		if len(c) >= 2 {
+			w.ref(c[1], s)
+		}
+		return
+	case "let-syntax", "letrec-syntax":
+		if len(c) < 2 {
+			return
+		}
+		local := child(s, n)
+		for _, b := range c[1].Children {
+			if len(b.Children) > 0 {
+				w.bind(b.Children[0], local, true)
+				w.ref(b.Children[0], local)
+			}
+		}
+		w.body(c[2:], local)
 		return
 	case "lambda":
 		if len(c) < 2 {

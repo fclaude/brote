@@ -30,6 +30,10 @@ var specialFormDocs = map[string]string{
 	"when":                  "(when test expr …)\nEvaluate the exprs if test is true.",
 	"unless":                "(unless test expr …)\nEvaluate the exprs if test is false.",
 	"guard":                 "(guard (var clause …) body …)\nEvaluate body; if it raises an error, bind var to the condition and try the clauses like cond. See error.",
+	"define-syntax":         "(define-syntax name (syntax-rules (literal …) (pattern template) …))\nDefine a macro: a use of name that matches a pattern is replaced by the template, with the pattern's variables filled in; x … repeats what comes before it.",
+	"let-syntax":            "(let-syntax ((name (syntax-rules …)) …) body …)\nDefine macros that are known in the body only.",
+	"letrec-syntax":         "(letrec-syntax ((name (syntax-rules …)) …) body …)\nLike let-syntax; the macros may use each other.",
+	"syntax-rules":          "(syntax-rules (literal …) (pattern template) …)\nThe rules of a macro; only valid inside define-syntax and let-syntax.",
 	"with-output-to-string": "(with-output-to-string expr …)\nEvaluate the exprs and return what they displayed or wrote, as a string.",
 }
 
@@ -88,6 +92,14 @@ func DocOf(name string, v Value) (string, bool) {
 			sig = append(sig, "…")
 		}
 		return "(" + strings.Join(sig, " ") + ")\n" + v.Prim.Meta.Doc, true
+	case KObject:
+		if m := macroOf(v); m != nil {
+			lines := make([]string, len(m.rules))
+			for i, r := range m.rules {
+				lines[i] = Write(Cons(Sym(name), r.pattern))
+			}
+			return strings.Join(lines, "\n") + "\nA macro.", true
+		}
 	case KProc:
 		c := v.Proc
 		sig := append([]string{name}, c.Params...)
