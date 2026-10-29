@@ -524,7 +524,7 @@ func TestDocCoverage(t *testing.T) {
 }
 
 func FuzzReader(f *testing.F) {
-	for _, s := range []string{"(+ 1 2)", "'(a . b)", "\"str\\n\"", "`(1 ,x ,@y)", "#t", "1.5e3", "(((", ")", "; c\n1", "#(1 2 \"x\")", "#( )", "#| c |# 1", "#(#(1) 2)"} {
+	for _, s := range []string{"(+ 1 2)", "'(a . b)", "\"str\\n\"", "`(1 ,x ,@y)", "#t", "1.5e3", "(((", ")", "; c\n1", "#(1 2 \"x\")", "#( )", "#| c |# 1", "#(#(1) 2)", `#\a`, `#\space`, `#\x41`, `#\(`, `#\)`, `(#\x #\newline)`, `#\x1f600`} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, src string) {

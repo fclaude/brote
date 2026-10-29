@@ -185,3 +185,10 @@ func TestEditorScrollsALongLine(t *testing.T) {
 		}
 	}
 }
+
+func TestEditorAltDKillsAWordForward(t *testing.T) {
+	got, err := edit(t, newTestEditor(), "foo bar baz\x01\x1bf\x1bd\r")
+	if err != nil || got != "foo baz" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}

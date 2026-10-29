@@ -5,7 +5,7 @@
 
 Brote is a small Scheme interpreter written in Go. A Go program embeds it to let people script the program, and the `brote` command runs it on its own. It came out of the interpreter inside my coding agent, which I pulled out so other programs could use it.
 
-The language has 64-bit integers and floats, UTF-8 strings, lists, vectors, hash tables, closures, proper tail calls, `guard` for errors, and JSON. Tasks and channels, like goroutines, run a script's work at the same time on every core, and cannot corrupt the interpreter or crash the host. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go. The `std` package has files, HTTP, programs, regular expressions and more behind a policy: a host grants a module, and how much of it, or the script doesn't have it at all.
+The language has 64-bit integers and floats, characters, UTF-8 strings and string ports, lists, vectors, hash tables, closures, proper tail calls, `syntax-rules` macros, `guard` for errors (which say where they happened), and JSON. Tasks and channels, like goroutines, run a script's work at the same time on every core, and cannot corrupt the interpreter or crash the host. It has no dependencies outside the Go standard library. A script can only reach the machine through the Go functions the host program registers, evaluation stops when its `context.Context` does, and a host can put a gate in front of every call from Scheme into Go. The `std` package has files, HTTP, programs, regular expressions and more behind a policy: a host grants a module, and how much of it, or the script doesn't have it at all.
 
 Here's a program and what the interpreter prints for it:
 
@@ -67,9 +67,10 @@ The documentation is at <https://fclaude.github.io/brote/>, and the same pages a
 ```bash
 make check    # gofmt, go vet, staticcheck if installed, go test -race ./...
 make build    # bin/brote
+bin/brote test tests    # the language's own tests, written in Scheme (after make build)
 ```
 
-The tests in `scheme/` are the language's conformance suite and the embedding contract (`embed_test.go`). The examples in `scheme/example_test.go` are tests too, `FuzzReader` fuzzes the reader, and `cmd/brote/docs_test.go` runs every example on the documentation pages and compares what they print with what the page shows. After changing a page, `DOCS_UPDATE=1 go test ./cmd/brote -run TestDocExamples` rewrites the output blocks.
+The tests in `scheme/` are the language's conformance suite and the embedding contract (`embed_test.go`), and `tests/` has the language's behaviour written as Brote tests (`brote test tests`). The examples in `scheme/example_test.go` are tests too, `FuzzReader` fuzzes the reader, and `cmd/brote/docs_test.go` runs every example on the documentation pages and compares what they print with what the page shows. After changing a page, `DOCS_UPDATE=1 go test ./cmd/brote -run TestDocExamples` rewrites the output blocks.
 
 ## Status
 

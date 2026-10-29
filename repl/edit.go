@@ -295,11 +295,11 @@ func (e *Editor) escape(s *lineState) {
 	case 'f':
 		e.wordRight(s)
 	case 'd':
-		end := s.pos
-		save := s.pos
+		start := s.pos
 		e.wordRight(s)
-		end, s.pos = s.pos, save
-		s.buf = append(s.buf[:s.pos], s.buf[end:]...)
+		end := s.pos
+		s.pos = start
+		s.buf = append(s.buf[:start], s.buf[end:]...)
 	case 'O':
 		k, _, _ := e.r.ReadRune()
 		switch k {
