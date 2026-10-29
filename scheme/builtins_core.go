@@ -37,6 +37,9 @@ func (in *Interp) registerBuiltins() {
 	in.registerJSON()
 	in.registerMeta()
 	in.registerTaint()
+	if in.tasks != nil {
+		in.registerTasks()
+	}
 }
 
 func (in *Interp) registerCore() {

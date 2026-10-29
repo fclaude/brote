@@ -16,28 +16,48 @@ import (
 // context carries, or in a new one.
 type task struct {
 	// depth counts the evals in progress in this task, nested ones included.
-	// Tail calls loop inside one eval and do not add to it; MaxDepth bounds it.
+	// Tail calls loop inside one eval and do not add to it; limit bounds it.
 	depth int
+	limit int
 	// out is where display, write and newline go while with-output-to-string
 	// is capturing; nil means the interpreter's writer.
 	out io.Writer
 	// printed is the taint of what has been printed since the capture began;
 	// the string with-output-to-string returns has it.
 	printed Taint
+
+	// root is the evaluation this task belongs to, and obj its handle; both
+	// are nil unless the interpreter has tasks (WithTasks).
+	root *root
+	obj  *taskObj
 }
 
-type taskKey struct{}
+// taskKey is the context key under which an interpreter keeps the task a
+// context belongs to. It is per interpreter, so a handler that evaluates in
+// a second interpreter with its own context does not borrow the first's task.
+type taskKey struct{ in *Interp }
 
 // enter returns the task ctx belongs to and a context that carries it. A
-// context that carries none starts a new task, so a host call from outside
-// any evaluation is its own task; a handler that passes its Call.Ctx on
-// (as map and register-tool do) stays in its caller's.
-func enter(ctx context.Context) (*task, context.Context) {
-	if t, ok := ctx.Value(taskKey{}).(*task); ok {
-		return t, ctx
+// context that carries none starts a new task (the root of a new evaluation),
+// so a host call from outside any evaluation is its own; a handler that passes
+// its Call.Ctx on (as map and register-tool do) stays in its caller's.
+//
+// When this call started the evaluation and the interpreter has tasks, done is
+// non-nil and must be called with the evaluation's error once it is over: it
+// cancels the tasks still running, waits for them, and returns the error the
+// evaluation ends with.
+func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done func(error) error) {
+	if t, ok := ctx.Value(taskKey{in}).(*task); ok {
+		return t, ctx, nil
 	}
-	t := new(task)
-	return t, context.WithValue(ctx, taskKey{}, t)
+	t = &task{limit: MaxDepth}
+	if in.tasks != nil {
+		var r *root
+		ctx, r = in.tasks.newRoot(ctx)
+		t.root, t.obj = r, &taskObj{id: 0, done: make(chan struct{})}
+		done = func(err error) error { return r.leave(err) }
+	}
+	return t, context.WithValue(ctx, taskKey{in}, t), done
 }
 
 // writer is where t's output goes: its capture, else the interpreter's.

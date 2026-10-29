@@ -509,7 +509,7 @@ func TestDocCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(doc)
-	for _, p := range New().Prims() {
+	for _, p := range New(WithTasks(TaskLimits{})).Prims() {
 		if !strings.Contains(text, "`("+p.Name+" ") && !strings.Contains(text, "`("+p.Name+")") && !strings.Contains(text, "`"+p.Name+"`") {
 			t.Errorf("primitive %q is not documented in docs/scheme.md", p.Name)
 		}

@@ -307,6 +307,31 @@ Output goes to the interpreter's output writer, which the host provides
 | `(void)` | the void value |
 | `(error message irritant …)` | raise; see §4 |
 
+### Tasks
+
+Available when the host gives the interpreter tasks (`scheme.WithTasks`; the `brote` command does). A task is a piece of Scheme running at the same time as the rest of the program, on its own core if there is one, sharing the program's variables, vectors and hash tables. Without the grant these names are unbound.
+
+| | |
+|---|---|
+| `(spawn thunk)` | start `thunk` (a procedure of no arguments) as a new task and return the task at once |
+| `(task-wait t)` | wait for `t` to finish; its value, or the error it ended with raised again here |
+| `(task-wait-all ts)` | `task-wait` for each task in the list; the list of their values. If any failed, the first one's error is raised once all have finished |
+| `(task-done? t)` | `#t` once `t` has finished; never waits |
+| `(task-cancel! t)` | cancel `t`: it stops at its next step, and a wait or a host call it is in the middle of (an HTTP request, a program) ends. Does nothing to a finished task |
+| `(current-task)` | the task running this call |
+| `(task? x)` | |
+
+Rules:
+
+- **A task lives no longer than the evaluation that started it.** When the outermost `EvalString`, `Apply` or `LoadFile` returns, tasks still running are cancelled and waited for first. A task that failed and that nothing waited for fails the evaluation instead of being dropped; a script that wants fire-and-forget catches the error inside the thunk.
+- **An ordinary error in a task** is raised again by `task-wait`, where `guard` can catch it.
+- **Cancellation** cannot be caught by the task it cancels, as with a host's cancelled context. `task-wait` on a cancelled task raises an ordinary error ("task N was cancelled").
+- **A denial from the guard, or a halt, in any task ends the whole evaluation** and cannot be caught by `guard` anywhere, including around `task-wait`. A script cannot hide a refusal by running the refused call in a task.
+- **Memory.** Each operation on a variable, vector or hash table is atomic: tasks cannot corrupt them, and the host cannot crash. A *sequence* of operations is not: `(set! n (+ n 1))` reads `n` and then writes it, and another task's write in between is lost. `hash-update!` applies its procedure atomically (it may run it more than once, so it should have no effects). The primitives for the compound cases come with channels, locks and atoms.
+- **Output.** `with-output-to-string` captures only the task that asked for it. A spawned task writes to the host's output, not to its spawner's capture.
+- **Origin and taint** are inherited: a task started from a model-originated call is model-originated, and a value keeps its provenance through `task-wait`.
+- **Limits.** The host bounds the tasks alive at once (default 256) and how deeply each may nest (default 2,500); past the first, `spawn` raises an error.
+
 ### JSON
 
 | | |

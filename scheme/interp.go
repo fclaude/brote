@@ -58,6 +58,11 @@ type Interp struct {
 	// loads itself, directly or through another, is refused.
 	loadMu  sync.Mutex
 	loading map[string]bool
+
+	// tasks is non-nil when the host gave scripts tasks (WithTasks).
+	tasks *taskRuntime
+	// gateSem is held while a Gate that is not safe for concurrent use runs.
+	gateSem chan struct{}
 }
 
 // MaxDepth is how deeply evaluation, and the reader, the printer, equal? and
@@ -127,6 +132,8 @@ func New(opts ...Option) *Interp {
 		prims:  make(map[string]*Prim),
 		out:    io.Discard,
 		isSF:   make(map[string]bool, len(specialForms)),
+
+		gateSem: make(chan struct{}, 1),
 	}
 	for _, s := range specialForms {
 		in.isSF[s] = true
@@ -176,13 +183,19 @@ func (in *Interp) EvalString(ctx context.Context, src string) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	t, ctx := enter(ctx)
+	t, ctx, done := in.enter(ctx)
 	result := Void
 	for _, f := range forms {
 		result, err = in.eval(t, ctx, f, in.global)
 		if err != nil {
-			return Value{}, err
+			break
 		}
+	}
+	if done != nil {
+		err = done(err)
+	}
+	if err != nil {
+		return Value{}, err
 	}
 	return result, nil
 }
@@ -224,8 +237,15 @@ func (in *Interp) LoadFile(ctx context.Context, path string) error {
 // calls back into Scheme passes its Call.Ctx, which keeps the call in the
 // handler's task.
 func (in *Interp) Apply(ctx context.Context, f Value, args []Value) (Value, error) {
-	t, ctx := enter(ctx)
-	return in.apply(t, ctx, f, args)
+	t, ctx, done := in.enter(ctx)
+	v, err := in.apply(t, ctx, f, args)
+	if done != nil {
+		err = done(err)
+	}
+	if err != nil {
+		return Value{}, err
+	}
+	return v, nil
 }
 
 func (in *Interp) apply(t *task, ctx context.Context, f Value, args []Value) (Value, error) {
@@ -281,14 +301,21 @@ func bindParams(c *Closure, args []Value) (*Env, error) {
 // Eval evaluates x in env. Tail positions loop instead of recursing, so
 // tail-recursive Scheme runs in constant Go stack (docs/scheme.md §3).
 func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
-	t, ctx := enter(ctx)
-	return in.eval(t, ctx, x, env)
+	t, ctx, done := in.enter(ctx)
+	v, err := in.eval(t, ctx, x, env)
+	if done != nil {
+		err = done(err)
+	}
+	if err != nil {
+		return Value{}, err
+	}
+	return v, nil
 }
 
 func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, error) {
-	if t.depth++; t.depth > MaxDepth {
+	if t.depth++; t.depth > t.limit {
 		t.depth--
-		return Value{}, errorf("eval", "recursion too deep: more than %d nested evaluations", MaxDepth)
+		return Value{}, errorf("eval", "recursion too deep: more than %d nested evaluations", t.limit)
 	}
 	defer t.leave()
 	for {

@@ -38,6 +38,7 @@ const (
 	KVec                // vector: a mutable, indexable array
 	KVoid               // the unspecified value
 	KHash               // hash table: a mutable map from strings, symbols, integers and booleans
+	KObject             // a native object Scheme can hold and pass on but not look into: a task, a channel (object.go)
 )
 
 func (k Kind) String() string {
@@ -66,6 +67,8 @@ func (k Kind) String() string {
 		return "void"
 	case KHash:
 		return "hash"
+	case KObject:
+		return "object"
 	}
 	return "unknown"
 }
@@ -176,6 +179,8 @@ func (c *Closure) nameIfAnonymous(name string) {
 type Handle struct {
 	Class string
 	ID    string
+
+	obj Object // set for a KObject, whose Class is the object's kind
 }
 
 // HandleValue wraps a handle as a value tainted with its credential class
@@ -289,6 +294,8 @@ func Eqv(a, b Value) bool {
 		return a.V == b.V
 	case KHash:
 		return a.Hash == b.Hash
+	case KObject:
+		return a.H.obj == b.H.obj
 	}
 	return false
 }
@@ -456,6 +463,8 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 		sb.WriteByte(')')
 	case KHash:
 		printHash(sb, v.Hash, write, transform, depth, st)
+	case KObject:
+		sb.WriteString(v.H.obj.String())
 	case KVoid:
 		sb.WriteString("#<void>")
 	default:

@@ -237,6 +237,32 @@ func (in *Interp) Prims() []*Prim {
 	return out
 }
 
+// ConcurrentGate is a Gate that is safe to call from several goroutines at
+// once. Any other Gate is called one call at a time, in whatever order the
+// tasks reach it, so a gate written for one goroutine, including one that
+// stops to ask the person, keeps working when scripts have tasks.
+type ConcurrentGate interface {
+	Gate
+	// ConcurrentSafe has no effect; implementing it is the declaration.
+	ConcurrentSafe()
+}
+
+// callGate runs the gate's check, one at a time unless the gate says it may
+// be called concurrently. A task waiting its turn still stops when its
+// context does.
+func (in *Interp) callGate(ctx context.Context, p *Prim, args []Value) error {
+	if _, ok := in.gate.(ConcurrentGate); ok {
+		return in.gate.Before(ctx, p, args)
+	}
+	select {
+	case in.gateSem <- struct{}{}:
+		defer func() { <-in.gateSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return in.gate.Before(ctx, p, args)
+}
+
 // SetGate installs the guard. nil allows everything: an embedder with no guard, such as a test.
 func (in *Interp) SetGate(g Gate) { in.gate = g }
 
@@ -307,7 +333,7 @@ func (in *Interp) applyPrim(t *task, ctx context.Context, p *Prim, args []Value)
 	}
 	args = in.expandArgs(p, args)
 	if in.gate != nil {
-		if err := in.gate.Before(ctx, p, args); err != nil {
+		if err := in.callGate(ctx, p, args); err != nil {
 			return Value{}, wrap(p.Name, err)
 		}
 	}
