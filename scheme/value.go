@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -86,9 +88,47 @@ type Value struct {
 }
 
 // Vector is the shared storage behind a vector value; vector-set! mutates
-// it in place and identity (eq?) is pointer identity.
+// it in place and identity (eq?) is pointer identity. Tasks share vectors,
+// so every access goes through a method that takes the vector's lock: one
+// operation is atomic, a sequence of them is not.
 type Vector struct {
-	Items []Value
+	mu    sync.RWMutex
+	items []Value
+}
+
+// Len is the number of elements.
+func (v *Vector) Len() int {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return len(v.items)
+}
+
+// At is element i, and false if i is out of range.
+func (v *Vector) At(i int) (Value, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if i < 0 || i >= len(v.items) {
+		return Value{}, false
+	}
+	return v.items[i], true
+}
+
+// SetAt stores x as element i, and reports false if i is out of range.
+func (v *Vector) SetAt(i int, x Value) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if i < 0 || i >= len(v.items) {
+		return false
+	}
+	v.items[i] = x
+	return true
+}
+
+// Elements is a copy of the elements, taken at one instant.
+func (v *Vector) Elements() []Value {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return append([]Value(nil), v.items...)
 }
 
 // Pair is a cons cell.
@@ -98,11 +138,36 @@ type Pair struct {
 
 // Closure is a lambda plus its defining environment.
 type Closure struct {
-	Name   string   // set by define for printing; "" if anonymous
+	Name   string   // given when the closure is made; "" if anonymous
 	Params []string // required positional parameters
 	Rest   string   // name bound to the remaining arguments, or ""
 	Body   []Value  // at least one expression
 	Env    *Env
+
+	// named is the name define gave an anonymous closure afterwards. The
+	// closure may be running in another task by then, so Name is never
+	// written after construction.
+	named atomic.Pointer[string]
+}
+
+// DisplayName is the name the closure prints and reports errors under:
+// Name, or else the first name define bound it to; "" if it has neither.
+func (c *Closure) DisplayName() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	if n := c.named.Load(); n != nil {
+		return *n
+	}
+	return ""
+}
+
+// nameIfAnonymous gives an anonymous closure the name define bound it to.
+// The first name wins.
+func (c *Closure) nameIfAnonymous(name string) {
+	if c.Name == "" {
+		c.named.CompareAndSwap(nil, &name)
+	}
 }
 
 // Handle is an opaque reference to a credential in the keychain (P3). It
@@ -152,7 +217,7 @@ func Sym(s string) Value { return Value{Kind: KSymbol, S: s} }
 func Cons(a, d Value) Value { return Value{Kind: KPair, P: &Pair{Car: a, Cdr: d}} }
 
 // Vec builds a vector from values.
-func Vec(vs ...Value) Value { return Value{Kind: KVec, V: &Vector{Items: append([]Value(nil), vs...)}} }
+func Vec(vs ...Value) Value { return Value{Kind: KVec, V: &Vector{items: append([]Value(nil), vs...)}} }
 
 // List builds a proper list.
 func List(vs ...Value) Value {
@@ -248,11 +313,17 @@ func equal(a, b Value, depth int) bool {
 			if a.V == b.V {
 				return true
 			}
-			if len(a.V.Items) != len(b.V.Items) {
+			// One element at a time, each under its own lock and never
+			// both vectors' at once: the vectors may be changing, and a
+			// pair of locks taken in two orders would deadlock.
+			n := a.V.Len()
+			if n != b.V.Len() {
 				return false
 			}
-			for i := range a.V.Items {
-				if !equal(a.V.Items[i], b.V.Items[i], depth+1) {
+			for i := 0; i < n; i++ {
+				x, okx := a.V.At(i)
+				y, oky := b.V.At(i)
+				if !okx || !oky || !equal(x, y, depth+1) {
 					return false
 				}
 			}
@@ -365,8 +436,8 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 		}
 		sb.WriteByte(')')
 	case KProc:
-		if v.Proc.Name != "" {
-			fmt.Fprintf(sb, "#<procedure %s>", v.Proc.Name)
+		if name := v.Proc.DisplayName(); name != "" {
+			fmt.Fprintf(sb, "#<procedure %s>", name)
 		} else {
 			sb.WriteString("#<procedure>")
 		}
@@ -376,7 +447,7 @@ func print(sb *strings.Builder, v Value, write bool, transform func(string) stri
 		fmt.Fprintf(sb, "#<cred:%s:%s>", v.H.Class, v.H.ID)
 	case KVec:
 		sb.WriteString("#(")
-		for i, el := range v.V.Items {
+		for i, el := range v.V.Elements() {
 			if i > 0 {
 				sb.WriteByte(' ')
 			}

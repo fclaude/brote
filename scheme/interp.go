@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
 )
 
 //go:embed all:prelude
@@ -28,15 +28,23 @@ var specialForms = []string{
 
 // Interp is one interpreter instance: a global environment, the primitive
 // table, and the guard hook.
+//
+// An Interp can be used from several goroutines: its environments, vectors
+// and hash tables are locked, and each evaluation keeps its own state in a
+// task. The exceptions are the host's own calls that change what the
+// interpreter is (Register, Freeze, BeginReload, EndReload, SetGate,
+// SetExpand): make those before evaluating, or between evaluations.
 type Interp struct {
 	global  *Env
-	prims   map[string]*Prim
 	gate    Gate
 	expand  func(string) string // rewrites path and argv arguments before the guard; nil for none
-	out     io.Writer
+	out     io.Writer           // where output goes outside a capture; safe for concurrent use
 	isSF    map[string]bool
 	baseDir string
 
+	// mu guards the primitive table and the fields that describe it.
+	mu    sync.RWMutex
+	prims map[string]*Prim
 	// reloading is set while a session re-runs its init file: what would
 	// change the tool list or the guard it started with is noted in
 	// reloadNotes instead of applied (ADR 9).
@@ -46,21 +54,14 @@ type Interp struct {
 	// registered: after it no primitive can be added (ADR 9).
 	frozen bool
 
-	// depth counts the Evals in progress, nested ones included. Tail calls
-	// loop inside one Eval and do not add to it; MaxDepth bounds it, so a
-	// runaway recursion is an error the program can catch, not a Go stack
-	// overflow, which ends the process and every session in it.
-	depth atomic.Int64
-	// loading holds the files LoadFile is evaluating, so a file that loads
-	// itself, directly or through another, is refused.
+	// loadMu guards loading, the files LoadFile is evaluating, so a file that
+	// loads itself, directly or through another, is refused.
+	loadMu  sync.Mutex
 	loading map[string]bool
-	// printed is the taint of what display and write have printed since
-	// with-output-to-string began capturing; the string it returns has it.
-	printed Taint
 }
 
 // MaxDepth is how deeply evaluation, and the reader, the printer, equal? and
-// json-emit, may nest. A nested Eval takes one to five kilobytes of Go stack
+// json-emit, may nest. Evaluation is counted per task. A nested Eval takes one to five kilobytes of Go stack
 // (more when it recurses through a primitive such as map), so the limit costs
 // at most some 50 MB, far inside Go's gigabyte even with sub-agents nested
 // above it. Tail calls do not nest, and the default loop's own walks are tail
@@ -71,16 +72,30 @@ const MaxDepth = 10_000
 // register-tool replaces the body of a tool whose name, description and
 // parameters are unchanged, and notes any other registration instead of
 // applying it; register-check is noted, not applied.
-func (in *Interp) BeginReload() { in.reloading, in.reloadNotes = true, nil }
+func (in *Interp) BeginReload() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.reloading, in.reloadNotes = true, nil
+}
 
 // EndReload ends it and returns what could not change in this session.
 func (in *Interp) EndReload() []string {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	notes := in.reloadNotes
 	in.reloading, in.reloadNotes = false, nil
 	return notes
 }
 
+func (in *Interp) isReloading() bool {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
+	return in.reloading
+}
+
 func (in *Interp) noteReload(format string, args ...any) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	in.reloadNotes = append(in.reloadNotes, fmt.Sprintf(format, args...))
 }
 
@@ -88,7 +103,11 @@ func (in *Interp) noteReload(format string, args ...any) {
 // on. The loop calls it when it fixes the tool list, so a tool body that
 // registers a helper later cannot add a model-callable primitive that was
 // never offered.
-func (in *Interp) Freeze() { in.frozen = true }
+func (in *Interp) Freeze() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.frozen = true
+}
 
 // Option configures New.
 type Option func(*Interp)
@@ -115,6 +134,7 @@ func New(opts ...Option) *Interp {
 	for _, o := range opts {
 		o(in)
 	}
+	in.out = &syncWriter{w: in.out}
 	in.registerBuiltins()
 	if err := in.loadPrelude(); err != nil {
 		panic("scheme: prelude: " + err.Error())
@@ -156,9 +176,10 @@ func (in *Interp) EvalString(ctx context.Context, src string) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
+	t, ctx := enter(ctx)
 	result := Void
 	for _, f := range forms {
-		result, err = in.Eval(ctx, f, in.global)
+		result, err = in.eval(t, ctx, f, in.global)
 		if err != nil {
 			return Value{}, err
 		}
@@ -173,14 +194,21 @@ func (in *Interp) LoadFile(ctx context.Context, path string) error {
 		path = filepath.Join(in.baseDir, path)
 	}
 	if abs, err := filepath.Abs(path); err == nil {
+		in.loadMu.Lock()
 		if in.loading[abs] {
+			in.loadMu.Unlock()
 			return fmt.Errorf("%s: loaded again while it is being loaded", path)
 		}
 		if in.loading == nil {
 			in.loading = map[string]bool{}
 		}
 		in.loading[abs] = true
-		defer delete(in.loading, abs)
+		in.loadMu.Unlock()
+		defer func() {
+			in.loadMu.Lock()
+			delete(in.loading, abs)
+			in.loadMu.Unlock()
+		}()
 	}
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -192,17 +220,24 @@ func (in *Interp) LoadFile(ctx context.Context, path string) error {
 	return nil
 }
 
-// Apply calls a procedure with already-evaluated arguments.
+// Apply calls a procedure with already-evaluated arguments. A handler that
+// calls back into Scheme passes its Call.Ctx, which keeps the call in the
+// handler's task.
 func (in *Interp) Apply(ctx context.Context, f Value, args []Value) (Value, error) {
+	t, ctx := enter(ctx)
+	return in.apply(t, ctx, f, args)
+}
+
+func (in *Interp) apply(t *task, ctx context.Context, f Value, args []Value) (Value, error) {
 	switch f.Kind {
 	case KPrim:
-		return in.applyPrim(ctx, f.Prim, args)
+		return in.applyPrim(t, ctx, f.Prim, args)
 	case KProc:
 		env, err := bindParams(f.Proc, args)
 		if err != nil {
 			return Value{}, err
 		}
-		return in.evalBody(ctx, f.Proc.Body, env)
+		return in.evalBody(t, ctx, f.Proc.Body, env)
 	default:
 		return Value{}, errorf("apply", "not a procedure: %s", Write(f))
 	}
@@ -210,20 +245,19 @@ func (in *Interp) Apply(ctx context.Context, f Value, args []Value) (Value, erro
 
 // evalBody evaluates a sequence, the last expression in tail position of
 // this Go frame.
-func (in *Interp) evalBody(ctx context.Context, body []Value, env *Env) (Value, error) {
+func (in *Interp) evalBody(t *task, ctx context.Context, body []Value, env *Env) (Value, error) {
 	for i := 0; i < len(body)-1; i++ {
-		if _, err := in.Eval(ctx, body[i], env); err != nil {
+		if _, err := in.eval(t, ctx, body[i], env); err != nil {
 			return Value{}, err
 		}
 	}
-	return in.Eval(ctx, body[len(body)-1], env)
+	return in.eval(t, ctx, body[len(body)-1], env)
 }
 
 func bindParams(c *Closure, args []Value) (*Env, error) {
-	env := NewEnv(c.Env)
 	n := len(c.Params)
 	if len(args) < n || (len(args) > n && c.Rest == "") {
-		name := c.Name
+		name := c.DisplayName()
 		if name == "" {
 			name = "#<procedure>"
 		}
@@ -232,11 +266,14 @@ func bindParams(c *Closure, args []Value) (*Env, error) {
 		}
 		return nil, errorf(name, "expected %d argument(s), got %d", n, len(args))
 	}
+	// Nothing can see this frame until the body runs, so it is filled
+	// without taking its lock.
+	env := newFrame(c.Env, n+1)
 	for i, p := range c.Params {
-		env.Define(p, args[i])
+		env.init(p, args[i])
 	}
 	if c.Rest != "" {
-		env.Define(c.Rest, List(args[n:]...))
+		env.init(c.Rest, List(args[n:]...))
 	}
 	return env, nil
 }
@@ -244,11 +281,16 @@ func bindParams(c *Closure, args []Value) (*Env, error) {
 // Eval evaluates x in env. Tail positions loop instead of recursing, so
 // tail-recursive Scheme runs in constant Go stack (docs/scheme.md §3).
 func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
-	if in.depth.Add(1) > MaxDepth {
-		in.depth.Add(-1)
+	t, ctx := enter(ctx)
+	return in.eval(t, ctx, x, env)
+}
+
+func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, error) {
+	if t.depth++; t.depth > MaxDepth {
+		t.depth--
 		return Value{}, errorf("eval", "recursion too deep: more than %d nested evaluations", MaxDepth)
 	}
-	defer in.depth.Add(-1)
+	defer t.leave()
 	for {
 		switch x.Kind {
 		case KSymbol:
@@ -282,7 +324,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				if len(form) != 1 {
 					return Value{}, errorf("quasiquote", "expected 1 argument")
 				}
-				return in.quasi(ctx, form[0], env)
+				return in.quasi(t, ctx, form[0], env)
 
 			case "unquote", "unquote-splicing":
 				return Value{}, errorf(head.S, "outside quasiquote")
@@ -294,11 +336,11 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				if len(form) < 2 || len(form) > 3 {
 					return Value{}, errorf("if", "expected 2 or 3 arguments")
 				}
-				t, err := in.Eval(ctx, form[0], env)
+				cond, err := in.eval(t, ctx, form[0], env)
 				if err != nil {
 					return Value{}, err
 				}
-				if t.IsTrue() {
+				if cond.IsTrue() {
 					x = form[1]
 				} else if len(form) == 3 {
 					x = form[2]
@@ -308,13 +350,13 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				continue
 
 			case "define":
-				return in.evalDefine(ctx, form, env)
+				return in.evalDefine(t, ctx, form, env)
 
 			case "set!":
 				if len(form) != 2 || form[0].Kind != KSymbol {
 					return Value{}, errorf("set!", "expected (set! name expr)")
 				}
-				v, err := in.Eval(ctx, form[1], env)
+				v, err := in.eval(t, ctx, form[1], env)
 				if err != nil {
 					return Value{}, err
 				}
@@ -335,7 +377,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 					return Void, nil
 				}
 				for i := 0; i < len(form)-1; i++ {
-					if _, err := in.Eval(ctx, form[i], env); err != nil {
+					if _, err := in.eval(t, ctx, form[i], env); err != nil {
 						return Value{}, err
 					}
 				}
@@ -343,7 +385,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				continue
 
 			case "let", "let*", "letrec":
-				nx, nenv, err := in.evalLet(ctx, head.S, form, env)
+				nx, nenv, err := in.evalLet(t, ctx, head.S, form, env)
 				if err != nil {
 					return Value{}, err
 				}
@@ -351,7 +393,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				continue
 
 			case "case":
-				result, err := in.evalCase(ctx, form, env)
+				result, err := in.evalCase(t, ctx, form, env)
 				if err != nil {
 					return Value{}, err
 				}
@@ -362,14 +404,14 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				continue
 
 			case "do":
-				return in.evalDo(ctx, form, env)
+				return in.evalDo(t, ctx, form, env)
 
 			case "when", "unless":
 				who := head.S
 				if len(form) == 0 {
 					return Value{}, errorf(who, "expected a test")
 				}
-				test, err := in.Eval(ctx, form[0], env)
+				test, err := in.eval(t, ctx, form[0], env)
 				if err != nil {
 					return Value{}, err
 				}
@@ -381,7 +423,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 					return Void, nil
 				}
 				for i := 0; i < len(form)-1; i++ {
-					if _, err := in.Eval(ctx, form[i], env); err != nil {
+					if _, err := in.eval(t, ctx, form[i], env); err != nil {
 						return Value{}, err
 					}
 				}
@@ -389,30 +431,30 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 				continue
 
 			case "guard":
-				return in.evalGuard(ctx, form, env)
+				return in.evalGuard(t, ctx, form, env)
 
 			case "with-output-to-string":
 				if len(form) == 0 {
 					return Value{}, errorf("with-output-to-string", "expected a body expression")
 				}
-				saved, savedTaint := in.out, in.printed
+				saved, savedTaint := t.out, t.printed
 				buf := new(strings.Builder)
-				in.out, in.printed = buf, Taint{}
-				defer func() { in.printed = savedTaint }()
+				t.out, t.printed = buf, Taint{}
+				defer func() { t.printed = savedTaint }()
 				var err error
 				for _, f := range form {
-					if _, err = in.Eval(ctx, f, env); err != nil {
+					if _, err = in.eval(t, ctx, f, env); err != nil {
 						break
 					}
 				}
-				in.out = saved
+				t.out = saved
 				if err != nil {
 					return Value{}, err
 				}
-				return Value{Kind: KString, S: buf.String(), Taint: in.printed}, nil
+				return Value{Kind: KString, S: buf.String(), Taint: t.printed}, nil
 
 			case "cond":
-				result, err := in.condClauses(ctx, form, env)
+				result, err := in.condClauses(t, ctx, form, env)
 				if err != nil {
 					return Value{}, err
 				}
@@ -427,7 +469,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 					return True, nil
 				}
 				for i := 0; i < len(form)-1; i++ {
-					v, err := in.Eval(ctx, form[i], env)
+					v, err := in.eval(t, ctx, form[i], env)
 					if err != nil {
 						return Value{}, err
 					}
@@ -443,7 +485,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 					return False, nil
 				}
 				for i := 0; i < len(form)-1; i++ {
-					v, err := in.Eval(ctx, form[i], env)
+					v, err := in.eval(t, ctx, form[i], env)
 					if err != nil {
 						return Value{}, err
 					}
@@ -460,7 +502,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 		if err := ctx.Err(); err != nil {
 			return Value{}, wrap("eval", err)
 		}
-		f, err := in.Eval(ctx, head, env)
+		f, err := in.eval(t, ctx, head, env)
 		if err != nil {
 			return Value{}, err
 		}
@@ -470,13 +512,13 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 		}
 		args := make([]Value, len(argForms))
 		for i, a := range argForms {
-			if args[i], err = in.Eval(ctx, a, env); err != nil {
+			if args[i], err = in.eval(t, ctx, a, env); err != nil {
 				return Value{}, err
 			}
 		}
 		switch f.Kind {
 		case KPrim:
-			return in.applyPrim(ctx, f.Prim, args)
+			return in.applyPrim(t, ctx, f.Prim, args)
 		case KProc:
 			nenv, err := bindParams(f.Proc, args)
 			if err != nil {
@@ -484,7 +526,7 @@ func (in *Interp) Eval(ctx context.Context, x Value, env *Env) (Value, error) {
 			}
 			body := f.Proc.Body
 			for i := 0; i < len(body)-1; i++ {
-				if _, err := in.Eval(ctx, body[i], nenv); err != nil {
+				if _, err := in.eval(t, ctx, body[i], nenv); err != nil {
 					return Value{}, err
 				}
 			}

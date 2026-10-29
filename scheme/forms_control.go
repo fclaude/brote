@@ -9,7 +9,7 @@ import (
 // It is a Go loop — constant stack regardless of iteration count. The value
 // of do is the value of the test clause's last expression (void if there is
 // none). Steps are evaluated in parallel using pre-step values, then assigned.
-func (in *Interp) evalDo(ctx context.Context, form []Value, env *Env) (Value, error) {
+func (in *Interp) evalDo(t *task, ctx context.Context, form []Value, env *Env) (Value, error) {
 	if len(form) < 2 {
 		return Value{}, errorf("do", "expected ((v init [step]) …) (test [e …]) [cmd …]")
 	}
@@ -48,7 +48,7 @@ func (in *Interp) evalDo(ctx context.Context, form []Value, env *Env) (Value, er
 
 	nenv := NewEnv(env)
 	for i, e := range inits {
-		v, err := in.Eval(ctx, e, env)
+		v, err := in.eval(t, ctx, e, env)
 		if err != nil {
 			return Value{}, err
 		}
@@ -58,24 +58,24 @@ func (in *Interp) evalDo(ctx context.Context, form []Value, env *Env) (Value, er
 		if err := ctx.Err(); err != nil {
 			return Value{}, wrap("do", err)
 		}
-		t, err := in.Eval(ctx, test, nenv)
+		done, err := in.eval(t, ctx, test, nenv)
 		if err != nil {
 			return Value{}, err
 		}
-		if t.IsTrue() {
+		if done.IsTrue() {
 			if len(testResult) == 0 {
 				return Void, nil
 			}
 			for i := 0; i < len(testResult)-1; i++ {
-				if _, err := in.Eval(ctx, testResult[i], nenv); err != nil {
+				if _, err := in.eval(t, ctx, testResult[i], nenv); err != nil {
 					return Value{}, err
 				}
 			}
-			return in.Eval(ctx, testResult[len(testResult)-1], nenv)
+			return in.eval(t, ctx, testResult[len(testResult)-1], nenv)
 		}
 		// Commands see this iteration's values, before the steps (R5RS).
 		for _, c := range commands {
-			if _, err := in.Eval(ctx, c, nenv); err != nil {
+			if _, err := in.eval(t, ctx, c, nenv); err != nil {
 				return Value{}, err
 			}
 		}
@@ -87,7 +87,7 @@ func (in *Interp) evalDo(ctx context.Context, form []Value, env *Env) (Value, er
 				newVals[i] = cur
 				continue
 			}
-			v, err := in.Eval(ctx, s, nenv)
+			v, err := in.eval(t, ctx, s, nenv)
 			if err != nil {
 				return Value{}, err
 			}
@@ -108,7 +108,7 @@ func (in *Interp) evalDo(ctx context.Context, form []Value, env *Env) (Value, er
 // Two things are never catchable, whatever the clauses say: a guard
 // denial and a cancelled context. A tool must not be able to hide that it
 // was refused, and Abort must always unwind.
-func (in *Interp) evalGuard(ctx context.Context, form []Value, env *Env) (Value, error) {
+func (in *Interp) evalGuard(t *task, ctx context.Context, form []Value, env *Env) (Value, error) {
 	if len(form) < 2 {
 		return Value{}, errorf("guard", "expected (guard (var clause ...) body ...)")
 	}
@@ -120,7 +120,7 @@ func (in *Interp) evalGuard(ctx context.Context, form []Value, env *Env) (Value,
 	clauses := spec[1:]
 	body := form[1:]
 
-	last, err := in.evalBody(ctx, body, env)
+	last, err := in.evalBody(t, ctx, body, env)
 	if err == nil {
 		return last, nil
 	}
@@ -137,7 +137,7 @@ func (in *Interp) evalGuard(ctx context.Context, form []Value, env *Env) (Value,
 	)
 	henv := NewEnv(env)
 	henv.Define(varName, cond)
-	result, cerr := in.condClauses(ctx, clauses, henv)
+	result, cerr := in.condClauses(t, ctx, clauses, henv)
 	if cerr != nil {
 		return Value{}, cerr
 	}
@@ -147,7 +147,7 @@ func (in *Interp) evalGuard(ctx context.Context, form []Value, env *Env) (Value,
 	if result.done {
 		return result.value, nil
 	}
-	return in.Eval(ctx, result.next, henv)
+	return in.eval(t, ctx, result.next, henv)
 }
 
 // Catchable reports whether a Scheme program may handle err. A denial, a
@@ -182,11 +182,11 @@ type branchResult struct {
 // evalCase implements (case key [(datum ...) body ...] ... [(else body ...)]).
 // Datums are compared with equal? (symbols by exact name, like the rest of
 // the language).
-func (in *Interp) evalCase(ctx context.Context, form []Value, env *Env) (branchResult, error) {
+func (in *Interp) evalCase(t *task, ctx context.Context, form []Value, env *Env) (branchResult, error) {
 	if len(form) < 2 {
 		return branchResult{}, errorf("case", "expected (key (datum …) (body …))")
 	}
-	key, err := in.Eval(ctx, form[0], env)
+	key, err := in.eval(t, ctx, form[0], env)
 	if err != nil {
 		return branchResult{}, err
 	}
@@ -196,7 +196,7 @@ func (in *Interp) evalCase(ctx context.Context, form []Value, env *Env) (branchR
 			return branchResult{}, errorf("case", "bad clause %s", Write(clause))
 		}
 		if parts[0].Kind == KSymbol && parts[0].S == "else" {
-			nx, _, e := in.runBodyPrefix(ctx, parts[1:], env)
+			nx, _, e := in.runBodyPrefix(t, ctx, parts[1:], env)
 			return branchResult{next: nx, matched: true}, e
 		}
 		datums, isList := parts[0].Slice()
@@ -211,7 +211,7 @@ func (in *Interp) evalCase(ctx context.Context, form []Value, env *Env) (branchR
 			}
 		}
 		if matched {
-			nx, _, e := in.runBodyPrefix(ctx, parts[1:], env)
+			nx, _, e := in.runBodyPrefix(t, ctx, parts[1:], env)
 			return branchResult{next: nx, matched: true}, e
 		}
 	}
@@ -221,7 +221,7 @@ func (in *Interp) evalCase(ctx context.Context, form []Value, env *Env) (branchR
 
 // condClauses is cond's clause walk, shared with guard; matched reports
 // whether any clause (including else) was selected.
-func (in *Interp) condClauses(ctx context.Context, clauses []Value, env *Env) (branchResult, error) {
+func (in *Interp) condClauses(t *task, ctx context.Context, clauses []Value, env *Env) (branchResult, error) {
 	for _, cl := range clauses {
 		parts, ok := cl.Slice()
 		if !ok || len(parts) == 0 {
@@ -231,31 +231,31 @@ func (in *Interp) condClauses(ctx context.Context, clauses []Value, env *Env) (b
 			if len(parts) == 1 {
 				return branchResult{done: true, value: Void, matched: true}, nil
 			}
-			nx, _, err := in.runBodyPrefix(ctx, parts[1:], env)
+			nx, _, err := in.runBodyPrefix(t, ctx, parts[1:], env)
 			return branchResult{next: nx, matched: true}, err
 		}
-		t, err := in.Eval(ctx, parts[0], env)
+		test, err := in.eval(t, ctx, parts[0], env)
 		if err != nil {
 			return branchResult{}, err
 		}
-		if !t.IsTrue() {
+		if !test.IsTrue() {
 			continue
 		}
 		if len(parts) == 1 {
-			return branchResult{done: true, value: t, matched: true}, nil
+			return branchResult{done: true, value: test, matched: true}, nil
 		}
 		if parts[1].Kind == KSymbol && parts[1].S == "=>" {
 			if len(parts) != 3 {
 				return branchResult{}, errorf("cond", "expected (test => proc)")
 			}
-			f, err := in.Eval(ctx, parts[2], env)
+			f, err := in.eval(t, ctx, parts[2], env)
 			if err != nil {
 				return branchResult{}, err
 			}
-			r, err := in.Apply(ctx, f, []Value{t})
+			r, err := in.apply(t, ctx, f, []Value{test})
 			return branchResult{done: true, value: r, matched: true}, err
 		}
-		nx, _, err := in.runBodyPrefix(ctx, parts[1:], env)
+		nx, _, err := in.runBodyPrefix(t, ctx, parts[1:], env)
 		return branchResult{next: nx, matched: true}, err
 	}
 	return branchResult{done: true, value: Void}, nil

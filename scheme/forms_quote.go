@@ -5,7 +5,7 @@ import (
 )
 
 // quasi implements one-level quasiquote.
-func (in *Interp) quasi(ctx context.Context, x Value, env *Env) (Value, error) {
+func (in *Interp) quasi(t *task, ctx context.Context, x Value, env *Env) (Value, error) {
 	if x.Kind != KPair {
 		return x, nil
 	}
@@ -16,7 +16,7 @@ func (in *Interp) quasi(ctx context.Context, x Value, env *Env) (Value, error) {
 			if !ok || len(args) != 1 {
 				return Value{}, errorf("unquote", "expected 1 argument")
 			}
-			return in.Eval(ctx, args[0], env)
+			return in.eval(t, ctx, args[0], env)
 		case "quasiquote":
 			return Value{}, errorf("quasiquote", "nested quasiquote is not supported")
 		}
@@ -35,7 +35,7 @@ func (in *Interp) quasi(ctx context.Context, x Value, env *Env) (Value, error) {
 			if !ok || len(args) != 1 {
 				return Value{}, errorf("unquote-splicing", "expected 1 argument")
 			}
-			v, err := in.Eval(ctx, args[0], env)
+			v, err := in.eval(t, ctx, args[0], env)
 			if err != nil {
 				return Value{}, err
 			}
@@ -45,7 +45,7 @@ func (in *Interp) quasi(ctx context.Context, x Value, env *Env) (Value, error) {
 			}
 			items = append(items, spliced...)
 		} else {
-			v, err := in.quasi(ctx, el, env)
+			v, err := in.quasi(t, ctx, el, env)
 			if err != nil {
 				return Value{}, err
 			}
@@ -55,7 +55,7 @@ func (in *Interp) quasi(ctx context.Context, x Value, env *Env) (Value, error) {
 	}
 	tail := cur
 	if cur.Kind != KNil {
-		t, err := in.quasi(ctx, cur, env)
+		t, err := in.quasi(t, ctx, cur, env)
 		if err != nil {
 			return Value{}, err
 		}

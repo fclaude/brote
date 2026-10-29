@@ -25,7 +25,11 @@ v, err := in.EvalString(ctx, src)                               // run source; v
 v, err = in.Apply(ctx, proc, args)                              // call a procedure value
 ```
 
-An `*Interp` has no locking, so use it from one goroutine at a time. Two goroutines evaluating in the same interpreter race on its environment (the race detector reports it, and without it Go's runtime can end the process with `concurrent map writes`). A host that receives work on many goroutines funnels it to one that owns the interpreter, or holds a mutex around every call. A handler may call back into the interpreter that called it, on the same goroutine (`Call.In.Apply(Call.Ctx, …)`), as `map` and `register-tool` do.
+Evaluating from several goroutines at once is safe. Environments, vectors and hash tables are locked, so goroutines that share an `*Interp` (or a closure, or a table) cannot corrupt it or end the process, and every operation on a shared value is atomic. A *sequence* of operations is not: `(set! n (+ n 1))` read `n`, then wrote it, and another goroutine's write in between is lost, as it would be in Go. `hash-update!` is atomic, and calls its procedure with no lock held, so the procedure may run more than once and should have no effects of its own. Output from `display` reaches the writer one call at a time, so a writer that is not safe for concurrent use is fine. Each `EvalString`, `Apply` or `Eval` that is not called from a handler is its own evaluation, with its own recursion depth against `MaxDepth` and its own `with-output-to-string` capture.
+
+What is not safe to do while an evaluation runs is change what the interpreter *is*: `Register`, `Freeze`, `BeginReload`, `EndReload`, `SetGate`, `SetExpand`, and replacing a registered primitive's `Handler`. Make those before evaluating, or between evaluations. Your handlers and your `Gate` are called from whichever goroutine is evaluating, so they must be safe for that if you evaluate from more than one. A handler may call back into the interpreter that called it (`Call.In.Apply(Call.Ctx, …)`), as `map` and `register-tool` do; pass `Call.Ctx` on, because it is what keeps the callback in the evaluation that made the call (a callback on a fresh context is a new evaluation, with a fresh depth count and no cancellation).
+
+`Vector.Items` is no longer exported. `Len`, `At`, `SetAt` and `Elements` take the vector's lock.
 
 Separate interpreters share nothing. There is no package-level state, so a host may run any number of them, each in its own goroutine.
 
@@ -235,4 +239,4 @@ Nodwyn's imports, so it waits for a minor version.
 | Handler errors reach the program and the host | `TestHandlerErrorsReachProgramAndHost` |
 | Registration ends at `Freeze` | `TestFreezeEndsRegistration` |
 | An unsaid origin is not the user's | `TestAnUnsaidOriginIsNotTheUsers`, `TestOriginDefaultsToNotTheUser` |
-| Concurrent use of **one** interpreter is unsafe | not tested (a test that fails by design); observed once under `-race` on 2026-10-22 |
+| One interpreter may be used from several goroutines | `scheme/concurrent_test.go`, under `-race` |

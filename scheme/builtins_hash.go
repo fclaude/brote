@@ -92,14 +92,14 @@ func (in *Interp) registerHashes() {
 		if err != nil {
 			return Value{}, err
 		}
-		return Int(int64(t.live)), nil
+		return Int(int64(t.count())), nil
 	})
 	in.mustRegister("hash-keys", "The keys of a hash table as a list, in the order they were first added.", []Param{h}, false, func(c *Call) (Value, error) {
 		t, err := c.hashArg(0)
 		if err != nil {
 			return Value{}, err
 		}
-		out := make([]Value, 0, t.live)
+		out := make([]Value, 0, t.count())
 		t.each(func(k, _ Value) { out = append(out, k) })
 		return List(out...), nil
 	})
@@ -108,7 +108,7 @@ func (in *Interp) registerHashes() {
 		if err != nil {
 			return Value{}, err
 		}
-		out := make([]Value, 0, t.live)
+		out := make([]Value, 0, t.count())
 		t.each(func(_, v Value) { out = append(out, v) })
 		return List(out...), nil
 	})
@@ -117,7 +117,7 @@ func (in *Interp) registerHashes() {
 		if err != nil {
 			return Value{}, err
 		}
-		out := make([]Value, 0, t.live)
+		out := make([]Value, 0, t.count())
 		t.each(func(k, v Value) { out = append(out, Cons(k, v)) })
 		return List(out...), nil
 	})
@@ -155,18 +155,28 @@ func (in *Interp) registerHashes() {
 			if err != nil {
 				return Value{}, err
 			}
-			cur, ok := t.get(k)
-			if !ok {
-				if len(c.Args) < 4 {
-					return Value{}, errorf(c.Name, "no key %s", Write(c.Args[1]))
+			// The update is atomic: read the entry, call proc with no lock
+			// held, and store the result only if no one wrote the entry
+			// meanwhile, else start again. proc can therefore run more
+			// than once, and should have no effects of its own.
+			for {
+				cur, ver, ok := t.snapshot(k)
+				if !ok {
+					if len(c.Args) < 4 {
+						return Value{}, errorf(c.Name, "no key %s", Write(c.Args[1]))
+					}
+					cur = c.Args[3]
 				}
-				cur = c.Args[3]
+				next, err := c.In.Apply(c.Ctx, f, []Value{cur})
+				if err != nil {
+					return Value{}, err
+				}
+				if t.setIfUnchanged(k, c.Args[1], next, ver, ok) {
+					return Void, nil
+				}
+				if err := c.Ctx.Err(); err != nil {
+					return Value{}, wrap(c.Name, err)
+				}
 			}
-			next, err := c.In.Apply(c.Ctx, f, []Value{cur})
-			if err != nil {
-				return Value{}, err
-			}
-			t.set(k, c.Args[1], next)
-			return Void, nil
 		})
 }

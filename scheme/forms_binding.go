@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-func (in *Interp) evalDefine(ctx context.Context, form []Value, env *Env) (Value, error) {
+func (in *Interp) evalDefine(t *task, ctx context.Context, form []Value, env *Env) (Value, error) {
 	if len(form) < 2 {
 		return Value{}, errorf("define", "expected (define name expr) or (define (name params...) body...)")
 	}
@@ -14,12 +14,12 @@ func (in *Interp) evalDefine(ctx context.Context, form []Value, env *Env) (Value
 		if len(form) != 2 {
 			return Value{}, errorf("define", "expected exactly one expression for %s", target.S)
 		}
-		v, err := in.Eval(ctx, form[1], env)
+		v, err := in.eval(t, ctx, form[1], env)
 		if err != nil {
 			return Value{}, err
 		}
-		if v.Kind == KProc && v.Proc.Name == "" {
-			v.Proc.Name = target.S
+		if v.Kind == KProc {
+			v.Proc.nameIfAnonymous(target.S)
 		}
 		env.Define(target.S, v)
 		return Void, nil
@@ -76,7 +76,7 @@ func makeClosure(who string, form []Value, env *Env) (*Closure, error) {
 
 // evalLet handles let, named let, let* and letrec. It returns the body's last
 // expression and the new environment for the caller's tail loop.
-func (in *Interp) evalLet(ctx context.Context, who string, form []Value, env *Env) (Value, *Env, error) {
+func (in *Interp) evalLet(t *task, ctx context.Context, who string, form []Value, env *Env) (Value, *Env, error) {
 	if len(form) < 2 {
 		return Value{}, nil, errorf(who, "expected bindings and a body")
 	}
@@ -92,7 +92,7 @@ func (in *Interp) evalLet(ctx context.Context, who string, form []Value, env *En
 		}
 		args := make([]Value, len(inits))
 		for i, e := range inits {
-			if args[i], err = in.Eval(ctx, e, env); err != nil {
+			if args[i], err = in.eval(t, ctx, e, env); err != nil {
 				return Value{}, nil, err
 			}
 		}
@@ -103,7 +103,7 @@ func (in *Interp) evalLet(ctx context.Context, who string, form []Value, env *En
 		if err != nil {
 			return Value{}, nil, err
 		}
-		return in.runBodyPrefix(ctx, c.Body, callEnv)
+		return in.runBodyPrefix(t, ctx, c.Body, callEnv)
 	}
 	names, inits, err := parseBindings(who, form[0])
 	if err != nil {
@@ -120,18 +120,18 @@ func (in *Interp) evalLet(ctx context.Context, who string, form []Value, env *En
 			nenv.Define(n, Void) // pre-bind so names resolve during init
 		}
 		for i, e := range inits {
-			v, err := in.Eval(ctx, e, nenv)
+			v, err := in.eval(t, ctx, e, nenv)
 			if err != nil {
 				return Value{}, nil, err
 			}
 			nenv.Define(names[i], v)
 		}
-		return in.runBodyPrefix(ctx, body, nenv)
+		return in.runBodyPrefix(t, ctx, body, nenv)
 	}
 	if who == "let" {
 		vals := make([]Value, len(inits))
 		for i, e := range inits {
-			if vals[i], err = in.Eval(ctx, e, env); err != nil {
+			if vals[i], err = in.eval(t, ctx, e, env); err != nil {
 				return Value{}, nil, err
 			}
 		}
@@ -139,26 +139,26 @@ func (in *Interp) evalLet(ctx context.Context, who string, form []Value, env *En
 		for i, n := range names {
 			nenv.Define(n, vals[i])
 		}
-		return in.runBodyPrefix(ctx, body, nenv)
+		return in.runBodyPrefix(t, ctx, body, nenv)
 	}
 	// let*
 	nenv := env
 	for i, e := range inits {
 		nenv = NewEnv(nenv)
-		v, err := in.Eval(ctx, e, nenv)
+		v, err := in.eval(t, ctx, e, nenv)
 		if err != nil {
 			return Value{}, nil, err
 		}
 		nenv.Define(names[i], v)
 	}
-	return in.runBodyPrefix(ctx, body, NewEnv(nenv))
+	return in.runBodyPrefix(t, ctx, body, NewEnv(nenv))
 }
 
 // runBodyPrefix evaluates all but the last body expression and hands the
 // last one back for tail evaluation.
-func (in *Interp) runBodyPrefix(ctx context.Context, body []Value, env *Env) (Value, *Env, error) {
+func (in *Interp) runBodyPrefix(t *task, ctx context.Context, body []Value, env *Env) (Value, *Env, error) {
 	for i := 0; i < len(body)-1; i++ {
-		if _, err := in.Eval(ctx, body[i], env); err != nil {
+		if _, err := in.eval(t, ctx, body[i], env); err != nil {
 			return Value{}, nil, err
 		}
 	}

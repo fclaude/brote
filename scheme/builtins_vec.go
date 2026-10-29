@@ -14,7 +14,7 @@ func (in *Interp) registerVectors() {
 		if c.Args[0].Kind != KVec {
 			return Value{}, c.typeErr(0, "vector")
 		}
-		return Int(int64(len(c.Args[0].V.Items))), nil
+		return Int(int64(c.Args[0].V.Len())), nil
 	})
 	in.mustRegister("vector-ref", "Element at 0-based index i of a vector.", []Param{{Name: "v", Type: "vector"}, {Name: "i", Type: "integer"}}, false, func(c *Call) (Value, error) {
 		if c.Args[0].Kind != KVec {
@@ -24,10 +24,11 @@ func (in *Interp) registerVectors() {
 		if err != nil {
 			return Value{}, err
 		}
-		if i < 0 || i >= int64(len(c.Args[0].V.Items)) {
-			return Value{}, errorf(c.Name, "index %d out of range for vector of length %d", i, len(c.Args[0].V.Items))
+		x, ok := c.Args[0].V.At(int(i))
+		if !ok || i != int64(int(i)) {
+			return Value{}, errorf(c.Name, "index %d out of range for vector of length %d", i, c.Args[0].V.Len())
 		}
-		return c.Args[0].V.Items[i], nil
+		return x, nil
 	})
 	in.mustRegister("vector-set!", "Set element i of a vector to x.", []Param{{Name: "v", Type: "vector"}, {Name: "i", Type: "integer"}, {Name: "x", Type: "any"}}, false, func(c *Call) (Value, error) {
 		if c.Args[0].Kind != KVec {
@@ -37,17 +38,16 @@ func (in *Interp) registerVectors() {
 		if err != nil {
 			return Value{}, err
 		}
-		if i < 0 || i >= int64(len(c.Args[0].V.Items)) {
-			return Value{}, errorf(c.Name, "index %d out of range for vector of length %d", i, len(c.Args[0].V.Items))
+		if i != int64(int(i)) || !c.Args[0].V.SetAt(int(i), c.Args[2]) {
+			return Value{}, errorf(c.Name, "index %d out of range for vector of length %d", i, c.Args[0].V.Len())
 		}
-		c.Args[0].V.Items[i] = c.Args[2]
 		return Void, nil
 	})
 	in.mustRegister("vector->list", "Elements of a vector as a list.", v, false, func(c *Call) (Value, error) {
 		if c.Args[0].Kind != KVec {
 			return Value{}, c.typeErr(0, "vector")
 		}
-		return List(c.Args[0].V.Items...), nil
+		return List(c.Args[0].V.Elements()...), nil
 	})
 	in.mustRegister("list->vector", "A vector with the elements of a list.", []Param{{Name: "l", Type: "list"}}, false, func(c *Call) (Value, error) {
 		s, err := c.List(0)

@@ -149,6 +149,8 @@ type Call struct {
 	Name   string
 	Args   []Value
 	Origin Origin
+
+	t *task // the task making the call
 }
 
 // Prim is an entry in the primitive table: the only Scheme→Go surface.
@@ -185,6 +187,8 @@ func (in *Interp) Register(p *Prim) error {
 	if p.Name == "" || p.Handler == nil {
 		return fmt.Errorf("scheme: primitive needs a name and a handler")
 	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	if in.frozen {
 		return fmt.Errorf("scheme: primitive %q cannot be registered now: the tool list is fixed for the session (ADR 9)", p.Name)
 	}
@@ -215,12 +219,16 @@ func (in *Interp) Register(p *Prim) error {
 
 // Lookup returns a primitive by name.
 func (in *Interp) Lookup(name string) (*Prim, bool) {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
 	p, ok := in.prims[name]
 	return p, ok
 }
 
 // Prims returns every primitive, sorted by name.
 func (in *Interp) Prims() []*Prim {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
 	out := make([]*Prim, 0, len(in.prims))
 	for _, p := range in.prims {
 		out = append(out, p)
@@ -290,7 +298,7 @@ func (in *Interp) expandArgs(p *Prim, args []Value) []Value {
 // applyPrim is the single Scheme→Go exit. Every primitive application —
 // from the model, the prelude, a .scm file or the REPL — passes through
 // here: arity check, guard, handler. Nothing else calls p.Handler.
-func (in *Interp) applyPrim(ctx context.Context, p *Prim, args []Value) (Value, error) {
+func (in *Interp) applyPrim(t *task, ctx context.Context, p *Prim, args []Value) (Value, error) {
 	if err := ctx.Err(); err != nil {
 		return Value{}, wrap(p.Name, err)
 	}
@@ -303,7 +311,7 @@ func (in *Interp) applyPrim(ctx context.Context, p *Prim, args []Value) (Value, 
 			return Value{}, wrap(p.Name, err)
 		}
 	}
-	v, err := p.Handler(&Call{Ctx: ctx, In: in, Name: p.Name, Args: args, Origin: OriginFrom(ctx)})
+	v, err := p.Handler(&Call{Ctx: ctx, In: in, Name: p.Name, Args: args, Origin: OriginFrom(ctx), t: t})
 	if err != nil {
 		// The message may quote the arguments, so a guard clause that
 		// reads it gets their taint with it.
@@ -374,7 +382,7 @@ func deepTaint(v Value, depth int, seen map[any]bool) Taint {
 				return t
 			}
 			seen[v.V] = true
-			for _, item := range v.V.Items {
+			for _, item := range v.V.Elements() {
 				t = Union(t, deepTaint(item, depth+1, seen))
 			}
 		case KHash:

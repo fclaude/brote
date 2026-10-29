@@ -63,10 +63,10 @@ func (in *Interp) registerMeta() {
 				return call.In.Apply(call.Ctx, proc, call.Args)
 			},
 		}
-		if c.In.reloading {
+		if c.In.isReloading() {
 			// The tool list is fixed for the session: a tool keeps its
 			// schema and takes its new body; anything else waits.
-			if old, ok := c.In.prims[name]; ok && old.Meta.Origin == "scheme" && reflect.DeepEqual(old.Meta, meta) {
+			if old, ok := c.In.Lookup(name); ok && old.Meta.Origin == "scheme" && reflect.DeepEqual(old.Meta, meta) {
 				old.Handler = p.Handler
 			} else {
 				c.In.noteReload("tool %s is new, or its description or parameters changed: the tool list is fixed for this session, so it applies from the next one", name)
@@ -126,7 +126,7 @@ user-originated Scheme.`,
 			Origin: "builtin",
 		},
 		Handler: func(c *Call) (Value, error) {
-			if c.In.reloading {
+			if c.In.isReloading() {
 				c.In.noteReload("register-check: the guard's checks are fixed for this session; changes apply from the next one")
 				return Void, nil
 			}
