@@ -15,7 +15,7 @@ brote -version
 
 ## The REPL
 
-With nothing to run, `brote` reads forms from standard input and prints the value of each one, unless it's void. When standard input is a terminal you get a `brote> ` prompt and Ctrl-C stops the form that's running without ending the session.
+With nothing to run, `brote` reads forms from standard input and prints the value of each one, unless it's void. When standard input is a terminal you get a short greeting with the version, a `brote> ` prompt, and Ctrl-C stops the form that's running without ending the session.
 
 At a terminal you can edit what you type. The arrow keys and Ctrl-B, Ctrl-F, Ctrl-A and Ctrl-E move; Backspace, Delete, Ctrl-D, Ctrl-K (to the end of the line), Ctrl-U (to the start), Ctrl-W (a word) and Ctrl-Y (put back what the last of those removed) change the line; Alt-B and Alt-F move by words; Up and Down (or Ctrl-P and Ctrl-N) go through the lines you typed before; Ctrl-L clears the screen; and at the prompt Ctrl-C drops the line and Ctrl-D leaves. A form that isn't finished goes on to the next line.
 

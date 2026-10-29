@@ -188,6 +188,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if isTerminal(stdin) {
 			o.Prompt, o.Continue = "brote> ", "...    "
 			o.Commands, o.Tracker = true, tracker
+			// Only a person at a terminal gets a greeting; a pipe gets just the values.
+			fmt.Fprintf(stdout, "Brote %s, a small Scheme interpreter in Go.\nType ,help for the REPL commands, (doc 'name) for help on a name, Ctrl-D to leave.\n", buildversion.Version)
 			if inF, ok := stdin.(*os.File); ok && termOut != nil {
 				// Lines are edited where the person types; the editor's own
 				// drawing does not go through the tracker.
