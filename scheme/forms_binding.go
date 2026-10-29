@@ -41,6 +41,15 @@ func (in *Interp) evalDefine(t *task, ctx context.Context, form []Value, env *En
 	}
 }
 
+// frameNames is the names of the frame a call to c binds: its parameters, then
+// the one that takes the rest.
+func frameNames(c *Closure) []string {
+	if c.Rest == "" {
+		return c.Params
+	}
+	return append(c.Params[:len(c.Params):len(c.Params)], c.Rest)
+}
+
 // makeClosure parses (params body...) where params is a symbol, a proper
 // list of symbols, or a dotted list of symbols.
 func makeClosure(who string, form []Value, env *Env) (*Closure, error) {
@@ -48,6 +57,7 @@ func makeClosure(who string, form []Value, env *Env) (*Closure, error) {
 		return nil, errorf(who, "expected parameters and at least one body expression")
 	}
 	c := &Closure{Env: env, Body: form[1:]}
+	defer func() { c.names = frameNames(c) }()
 	p := form[0]
 	switch p.Kind {
 	case KSymbol:
@@ -97,7 +107,7 @@ func (in *Interp) evalLet(t *task, ctx context.Context, who string, form []Value
 			}
 		}
 		loopEnv := NewEnv(env)
-		c := &Closure{Name: name, Params: names, Body: form[2:], Env: loopEnv}
+		c := &Closure{Name: name, Params: names, Body: form[2:], Env: loopEnv, names: names}
 		loopEnv.Define(name, Value{Kind: KProc, Proc: c})
 		callEnv, err := bindParams(c, args)
 		if err != nil {
@@ -135,11 +145,7 @@ func (in *Interp) evalLet(t *task, ctx context.Context, who string, form []Value
 				return Value{}, nil, err
 			}
 		}
-		nenv := NewEnv(env)
-		for i, n := range names {
-			nenv.Define(n, vals[i])
-		}
-		return in.runBodyPrefix(t, ctx, body, nenv)
+		return in.runBodyPrefix(t, ctx, body, frameOf(env, names, vals))
 	}
 	// let*
 	nenv := env

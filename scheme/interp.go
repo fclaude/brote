@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -237,6 +238,9 @@ func (in *Interp) LoadFile(ctx context.Context, path string) error {
 // calls back into Scheme passes its Call.Ctx, which keeps the call in the
 // handler's task.
 func (in *Interp) Apply(ctx context.Context, f Value, args []Value) (Value, error) {
+	// A call's frame takes its argument slice over, and the caller of Apply
+	// still owns this one (a handler passes its Call.Args on).
+	args = slices.Clone(args)
 	t, ctx, done := in.enter(ctx)
 	v, err := in.apply(t, ctx, f, args)
 	if done != nil {
@@ -286,16 +290,17 @@ func bindParams(c *Closure, args []Value) (*Env, error) {
 		}
 		return nil, errorf(name, "expected %d argument(s), got %d", n, len(args))
 	}
-	// Nothing can see this frame until the body runs, so it is filled
-	// without taking its lock.
-	env := newFrame(c.Env, n+1)
-	for i, p := range c.Params {
-		env.init(p, args[i])
-	}
+	// The frame takes the argument slice over (nothing else uses it once the
+	// call is made) and shares the closure's names. Nothing can see it until
+	// the body runs, so it is built without its lock.
 	if c.Rest != "" {
-		env.init(c.Rest, List(args[n:]...))
+		args = append(args[:n:n], List(args[n:]...))
 	}
-	return env, nil
+	names := c.names
+	if names == nil {
+		names = frameNames(c) // a closure not made by makeClosure
+	}
+	return frameOf(c.Env, names, args), nil
 }
 
 // Eval evaluates x in env. Tail positions loop instead of recursing, so
@@ -533,7 +538,7 @@ func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, 
 		if err != nil {
 			return Value{}, err
 		}
-		argForms, ok := x.P.Cdr.Slice()
+		argForms, ok := x.P.argSlice()
 		if !ok {
 			return Value{}, errorf("eval", "improper application %s", Write(x))
 		}
@@ -566,7 +571,7 @@ func (in *Interp) eval(t *task, ctx context.Context, x Value, env *Env) (Value, 
 }
 
 func formArgs(x Value) ([]Value, error) {
-	args, ok := x.P.Cdr.Slice()
+	args, ok := x.P.argSlice()
 	if !ok {
 		return nil, errorf(Write(x.P.Car), "improper form %s", Write(x))
 	}

@@ -1,7 +1,6 @@
 package scheme
 
 import (
-	"maps"
 	"sync"
 )
 
@@ -10,34 +9,70 @@ import (
 //
 // The root frame (the global environment) is read by every task on every
 // call, so it is a sync.Map and a read takes no lock. Every other frame has
-// its own lock; it is held for one map operation and never across a call
-// into Scheme.
+// its own lock, held for one lookup or one update and never across a call into
+// Scheme.
+//
+// A local frame is two parallel slices, names and values, and not a map:
+// frames are small, a call makes one, and a map costs several allocations
+// where this costs two. The names of a call's frame are the closure's own
+// parameter list, shared by every call and copied only if the body defines
+// something new.
 type Env struct {
 	parent *Env
 	global *sync.Map // the root frame's bindings; nil on every other frame
 
-	mu   sync.RWMutex
-	vars map[string]Value
+	mu    sync.RWMutex
+	names []string
+	vals  []Value
+	own   bool           // names belongs to this frame; otherwise it is a closure's, shared
+	index map[string]int // name -> position, once the frame is too big to scan
 }
+
+// indexAt is how many bindings a frame may have before it keeps an index.
+const indexAt = 12
 
 // NewEnv creates an empty frame under parent (nil for the global frame).
 func NewEnv(parent *Env) *Env {
 	if parent == nil {
 		return &Env{global: new(sync.Map)}
 	}
-	return &Env{parent: parent, vars: make(map[string]Value)}
+	return &Env{parent: parent, own: true}
 }
 
-// newFrame is a frame under parent with room for n bindings.
-func newFrame(parent *Env, n int) *Env {
-	return &Env{parent: parent, vars: make(map[string]Value, n)}
+// frameOf is a frame under parent that binds names to vals. It takes the
+// slices over: vals must not be used by the caller again, and names is not
+// modified (the frame copies it before it adds a binding). Nothing can see the
+// frame yet, so it is built without the lock.
+func frameOf(parent *Env, names []string, vals []Value) *Env {
+	e := &Env{parent: parent, names: names, vals: vals}
+	if len(names) > indexAt {
+		e.reindex()
+	}
+	return e
 }
 
-// init binds name in a frame that no one else can see yet (a call's frame
-// before its body runs), so it takes no lock. Use Define once the frame can
-// have been captured.
-func (e *Env) init(name string, v Value) {
-	e.vars[name] = v
+// find is the position of name in this frame, or -1. The caller holds the lock.
+// It looks from the end, so when a name appears twice the later binding wins.
+func (e *Env) find(name string) int {
+	if e.index != nil {
+		if i, ok := e.index[name]; ok {
+			return i
+		}
+		return -1
+	}
+	for i := len(e.names) - 1; i >= 0; i-- {
+		if e.names[i] == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func (e *Env) reindex() {
+	e.index = make(map[string]int, len(e.names)*2)
+	for i, n := range e.names {
+		e.index[n] = i
+	}
 }
 
 // Lookup finds name in this frame or any ancestor.
@@ -50,11 +85,12 @@ func (e *Env) Lookup(name string) (Value, bool) {
 			continue
 		}
 		env.mu.RLock()
-		v, ok := env.vars[name]
-		env.mu.RUnlock()
-		if ok {
+		if i := env.find(name); i >= 0 {
+			v := env.vals[i]
+			env.mu.RUnlock()
 			return v, true
 		}
+		env.mu.RUnlock()
 	}
 	return Value{}, false
 }
@@ -66,8 +102,23 @@ func (e *Env) Define(name string, v Value) {
 		return
 	}
 	e.mu.Lock()
-	e.vars[name] = v
-	e.mu.Unlock()
+	defer e.mu.Unlock()
+	if i := e.find(name); i >= 0 {
+		e.vals[i] = v
+		return
+	}
+	if !e.own {
+		e.names = append(make([]string, 0, len(e.names)+1), e.names...)
+		e.own = true
+	}
+	e.names = append(e.names, name)
+	e.vals = append(e.vals, v)
+	switch {
+	case e.index != nil:
+		e.index[name] = len(e.names) - 1
+	case len(e.names) > indexAt:
+		e.reindex()
+	}
 }
 
 // Set assigns an existing binding in the nearest frame that has it.
@@ -81,8 +132,8 @@ func (e *Env) Set(name string, v Value) bool {
 			continue
 		}
 		env.mu.Lock()
-		if _, ok := env.vars[name]; ok {
-			env.vars[name] = v
+		if i := env.find(name); i >= 0 {
+			env.vals[i] = v
 			env.mu.Unlock()
 			return true
 		}
@@ -103,7 +154,11 @@ func (e *Env) Snapshot() map[string]Value {
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return maps.Clone(e.vars)
+	m := make(map[string]Value, len(e.names))
+	for i, n := range e.names {
+		m[n] = e.vals[i]
+	}
+	return m
 }
 
 // Restore makes this frame's bindings a copy of a snapshot: names bound
@@ -116,11 +171,16 @@ func (e *Env) Restore(m map[string]Value) {
 		}
 		return
 	}
-	vars := maps.Clone(m)
-	if vars == nil {
-		vars = make(map[string]Value)
+	names := make([]string, 0, len(m))
+	vals := make([]Value, 0, len(m))
+	for k, v := range m {
+		names = append(names, k)
+		vals = append(vals, v)
 	}
 	e.mu.Lock()
-	e.vars = vars
-	e.mu.Unlock()
+	defer e.mu.Unlock()
+	e.names, e.vals, e.own, e.index = names, vals, true, nil
+	if len(names) > indexAt {
+		e.reindex()
+	}
 }

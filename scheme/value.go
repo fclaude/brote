@@ -137,6 +137,39 @@ func (v *Vector) Elements() []Value {
 // Pair is a cons cell.
 type Pair struct {
 	Car, Cdr Value
+
+	// args is Cdr as a slice, kept by the evaluator for a pair that is code.
+	// Pairs are immutable, so it never goes stale.
+	args atomic.Pointer[argList]
+}
+
+// argList is the cdr of a form as a slice, and whether it was a proper list.
+type argList struct {
+	items []Value
+	ok    bool
+}
+
+// argSlice is p's cdr as a slice for the evaluator, computed once for each
+// form and shared by every evaluation of it (and by every task running it).
+// The slice must not be modified.
+func (p *Pair) argSlice() ([]Value, bool) {
+	if a := p.args.Load(); a != nil {
+		return a.items, a.ok
+	}
+	n := 0
+	v := p.Cdr
+	for ; v.Kind == KPair; v = v.P.Cdr {
+		n++
+	}
+	a := &argList{ok: v.Kind == KNil}
+	if a.ok {
+		a.items = make([]Value, 0, n)
+		for v := p.Cdr; v.Kind == KPair; v = v.P.Cdr {
+			a.items = append(a.items, v.P.Car)
+		}
+	}
+	p.args.Store(a)
+	return a.items, a.ok
 }
 
 // Closure is a lambda plus its defining environment.
@@ -146,6 +179,10 @@ type Closure struct {
 	Rest   string   // name bound to the remaining arguments, or ""
 	Body   []Value  // at least one expression
 	Env    *Env
+
+	// names is Params and then Rest: the names of a call's frame, built when
+	// the closure is made and shared by every call.
+	names []string
 
 	// named is the name define gave an anonymous closure afterwards. The
 	// closure may be running in another task by then, so Name is never
@@ -252,6 +289,13 @@ func (v Value) AsFloat() float64 {
 
 // Slice converts a proper list to a slice. ok is false for improper lists.
 func (v Value) Slice() (out []Value, ok bool) {
+	n := 0
+	for w := v; w.Kind == KPair; w = w.P.Cdr {
+		n++
+	}
+	if n > 0 {
+		out = make([]Value, 0, n)
+	}
 	for v.Kind == KPair {
 		out = append(out, v.P.Car)
 		v = v.P.Cdr
