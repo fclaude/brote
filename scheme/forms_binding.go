@@ -57,6 +57,12 @@ func makeClosure(who string, form []Value, env *Env) (*Closure, error) {
 		return nil, errorf(who, "expected parameters and at least one body expression")
 	}
 	c := &Closure{Env: env, Body: form[1:]}
+	// A string ahead of other expressions describes the procedure: (doc f)
+	// returns it. It would do nothing if it were evaluated, so it is kept
+	// out of the body.
+	if len(c.Body) > 1 && c.Body[0].Kind == KString {
+		c.Doc, c.Body = c.Body[0].S, c.Body[1:]
+	}
 	defer func() { c.names = frameNames(c) }()
 	p := form[0]
 	switch p.Kind {

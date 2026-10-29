@@ -72,3 +72,90 @@ func TestEvalContextBoundsOneForm(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCommands(t *testing.T) {
+	got := run(t, ",doc take\n,doc nosuchthing\n(define (f x) \"Double x.\" (* 2 x))\n,defs\n,doc f\n,apropos vector-m\n,time (+ 1 2)\n,bogus\n,quit\n(display \"not reached\")\n", repl.Options{Commands: true})
+	for _, want := range []string{
+		"(take l n)\nThe first n elements of l.\n",
+		"nothing to say about nosuchthing\n",
+		"\nf\n",
+		"(f x)\nDouble x.\n",
+		"vector-map\n",
+		"3\ntook ",
+		"no command ,bogus; ,help lists them\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "not reached") {
+		t.Errorf(",quit did not end the session:\n%s", got)
+	}
+}
+
+// Without Commands a comma is Scheme's, so a script piped in is not
+// reinterpreted.
+func TestCommandsAreOffByDefault(t *testing.T) {
+	got := run(t, ",help\n", repl.Options{})
+	if !strings.HasPrefix(got, "error: ") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A comma inside an unfinished form is part of the form.
+func TestCommaInsideAFormIsNotACommand(t *testing.T) {
+	got := run(t, "(define x 1)\n`(a\n,x)\n", repl.Options{Commands: true})
+	if got != "(a 1)\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPromptStartsALineAfterUnfinishedOutput(t *testing.T) {
+	var out bytes.Buffer
+	tr := repl.NewTracker(&out)
+	in := scheme.New(scheme.WithOutput(tr))
+	if err := repl.Run(context.Background(), in, strings.NewReader("(display \"x\")\n(+ 1 2)\n"), tr, repl.Options{Prompt: "> ", Continue: ". ", Tracker: tr}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "> x\n> 3\n> \n"; out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestCompleter(t *testing.T) {
+	in := scheme.New()
+	complete := repl.Completer(in)
+	for _, c := range []struct {
+		line      string
+		start     int
+		wantAmong []string
+		wantNone  []string
+	}{
+		{"(string-up", 1, []string{"string-upcase"}, []string{"string-append"}},
+		{"(map string-ap", 5, []string{"string-append"}, []string{"string-upcase"}},
+		{"(if", 1, []string{"if"}, nil},
+		{",do", 0, []string{",doc"}, []string{",defs", "doc"}},
+	} {
+		start, got := complete([]rune(c.line), len([]rune(c.line)))
+		if start != c.start {
+			t.Errorf("%q: start = %d, want %d", c.line, start, c.start)
+		}
+		has := map[string]bool{}
+		for _, g := range got {
+			has[g] = true
+		}
+		for _, w := range c.wantAmong {
+			if !has[w] {
+				t.Errorf("%q: no %q in %v", c.line, w, got)
+			}
+		}
+		for _, w := range c.wantNone {
+			if has[w] {
+				t.Errorf("%q: unexpected %q in %v", c.line, w, got)
+			}
+		}
+	}
+	if _, got := complete([]rune("(foo "), 5); len(got) != 0 {
+		t.Errorf("an empty word completed to %v", got)
+	}
+}

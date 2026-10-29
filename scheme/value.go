@@ -183,6 +183,7 @@ type Closure struct {
 	Params []string // required positional parameters
 	Rest   string   // name bound to the remaining arguments, or ""
 	Body   []Value  // at least one expression
+	Doc    string   // the description a string before the body gave, or ""
 	Env    *Env
 
 	// names is Params and then Rest: the names of a call's frame, built when

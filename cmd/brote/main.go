@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/fclaude/brote/repl"
 	"github.com/fclaude/brote/scheme"
@@ -107,6 +108,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	interactive := !given["e"] && len(files) == 0
+	var tracker *repl.Tracker
+	termOut, _ := stdout.(*os.File)
+	if interactive && isTerminal(stdin) {
+		// The prompt starts a new line when a form printed text without ending it.
+		tracker = repl.NewTracker(stdout)
+		stdout = tracker
+	}
 	in := scheme.New(scheme.WithOutput(stdout), scheme.WithTasks(scheme.TaskLimits{}))
 	rt, err := std.Install(in, pol)
 	if err != nil {
@@ -118,7 +127,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// load would otherwise read any file the person can; keep it inside the grant.
 		in.SetGate(rt.Gate(nil))
 	}
-	interactive := !given["e"] && len(files) == 0
 	if err := registerHost(in, rt, scriptArgs, stdin, !interactive); err != nil {
 		fmt.Fprintf(stderr, "brote: %v\n", err)
 		return 1
@@ -145,6 +153,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		o := repl.Options{}
 		if isTerminal(stdin) {
 			o.Prompt, o.Continue = "brote> ", "...    "
+			o.Commands, o.Tracker = true, tracker
+			if inF, ok := stdin.(*os.File); ok && termOut != nil {
+				// Lines are edited where the person types; the editor's own
+				// drawing does not go through the tracker.
+				if ed := repl.NewTerminalEditor(inF, termOut, repl.Completer(in), historyPath()); ed != nil {
+					o.Lines = ed
+				}
+			}
 			o.EvalContext = func(parent context.Context) (context.Context, context.CancelFunc) {
 				return signal.NotifyContext(parent, os.Interrupt)
 			}
@@ -167,4 +183,16 @@ func isTerminal(r io.Reader) bool {
 	}
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// historyPath is the file the REPL keeps its history in: $BROTE_HISTORY, or
+// .brote_history in the home directory. "" (no history) if neither is known.
+func historyPath() string {
+	if p := os.Getenv("BROTE_HISTORY"); p != "" {
+		return p
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".brote_history")
+	}
+	return ""
 }

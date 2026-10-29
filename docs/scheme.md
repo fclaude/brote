@@ -129,7 +129,7 @@ already does.
 |---|---|
 | `(define name expr)` | bind `name` in the current environment |
 | `(define (name param … [. rest]) body …)` | shorthand for a named `lambda` |
-| `(lambda (param … [. rest]) body …)` `(lambda args body …)` | closure; `rest`/`args` receive a list |
+| `(lambda (param … [. rest]) body …)` `(lambda args body …)` | closure; `rest`/`args` receive a list. A string before the other body expressions is not evaluated: it describes the procedure (`doc`) |
 | `(if test then [else])` | missing `else` yields void |
 | `(let ((v e) …) body …)` | bind in parallel |
 | `(let name ((v e) …) body …)` | named let: `name` is bound to the loop procedure inside the body |
@@ -469,6 +469,8 @@ accident.
 |---|---|
 | `(primitives)` | list of primitive names, sorted |
 | `(primitive-info name)` | alist: `doc`, `params`, `variadic`, `egress`, `irreversible`, `host`, `origin` |
+| `(doc name)` | how a procedure or special form is called and what it does, as text; `#f` if there is nothing to say. `name` is a symbol or a procedure. For a procedure written in Scheme, the description is the string before its body: `(define (f x) "Double x." (* 2 x))` |
+| `(apropos text)` | the names of the procedures and special forms whose name contains `text`, sorted, as symbols |
 | `(register-tool name proc meta)` | add a primitive backed by a Scheme procedure; see §7 |
 | `(load path)` | evaluate a file's forms in the global environment; a relative path resolves against the interpreter's base directory (`scheme.WithBaseDir`). A **host** primitive: it reads the filesystem, and a gate may refuse it |
 | `(handle? x)` | |
