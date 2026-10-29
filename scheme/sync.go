@@ -34,6 +34,11 @@ type waiter struct {
 	err  error
 
 	cases []*wcase // the channel queues it is on, to leave them afterwards
+
+	// counted: it is in rt.blocked and rt.parked. A waiter that the outside
+	// world may wake (a host receiving on a channel, a task waiting on a
+	// host-fed channel) is not, so it never makes the others look deadlocked.
+	counted bool
 }
 
 func newWaiter(t *task) *waiter {
@@ -52,18 +57,33 @@ type wcase struct {
 // fire completes w with an outcome and wakes it. rt.mu is held.
 func (rt *taskRuntime) fire(w *waiter, idx int, val Value, ok bool, err error) {
 	w.done, w.idx, w.val, w.ok, w.err = true, idx, val, ok, err
-	rt.blocked--
-	delete(rt.parked, w)
+	if w.counted {
+		rt.blocked--
+		delete(rt.parked, w)
+	}
 	w.wake <- struct{}{}
+}
+
+// hostFed reports whether w waits on a channel the host feeds from outside.
+func (w *waiter) hostFed() bool {
+	for _, c := range w.cases {
+		if c.ch.hostFed {
+			return true
+		}
+	}
+	return false
 }
 
 // park blocks the calling task until w is fired or ctx is done. The caller
 // holds rt.mu with w queued wherever it should be found; park releases it.
 // It returns with the lock released, w's outcome set, and w no longer queued.
 func (rt *taskRuntime) park(ctx context.Context, w *waiter) {
-	rt.blocked++
-	rt.parked[w] = struct{}{}
-	rt.checkDeadlock()
+	w.counted = w.task != nil && !w.hostFed()
+	if w.counted {
+		rt.blocked++
+		rt.parked[w] = struct{}{}
+		rt.checkDeadlock()
+	}
 	rt.mu.Unlock()
 	select {
 	case <-w.wake:
@@ -73,8 +93,10 @@ func (rt *taskRuntime) park(ctx context.Context, w *waiter) {
 		if !w.done {
 			// Abandoned before anyone fired it.
 			w.done, w.err = true, ctx.Err()
-			rt.blocked--
-			delete(rt.parked, w)
+			if w.counted {
+				rt.blocked--
+				delete(rt.parked, w)
+			}
 		}
 	}
 	for _, c := range w.cases {

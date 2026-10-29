@@ -17,8 +17,11 @@ type channelObj struct {
 	cap    int
 	buf    []Value
 	closed bool
-	recvq  []*wcase
-	sendq  []*wcase
+	// hostFed: the host sends to this channel from outside, so a task waiting
+	// on it is not part of a deadlock (see HostFed).
+	hostFed bool
+	recvq   []*wcase
+	sendq   []*wcase
 }
 
 func (ch *channelObj) Kind() string   { return "channel" }

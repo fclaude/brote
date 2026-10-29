@@ -285,3 +285,15 @@ brote: proc-run: ls is not a command this host lets scripts run
 A command the host did not grant is an error, and so is one that cannot start, one that runs past its timeout (it is stopped, with the processes it started), and one that writes more than the limit. A nonzero exit is a result.
 
 What a granted command does is the command's business. Allowing `git` allows what `git` can be told to do, and allowing `sh`, `python` or `env` allows everything. Grant programs the way you would grant them to a person you do not fully trust.
+
+## One interpreter, different grants
+
+`std.Install` takes one `Policy` per interpreter and enforces it inside the procedures. A host whose modules each declare their own grant installs the widest policy any of them may have, and narrows it per call in its `scheme.Gate`, with the caller's own policy:
+
+| Method | Answers |
+|---|---|
+| `(*Policy).CheckNet(method, rawURL)` | whether a script holding this policy may send that request: `net` granted, the scheme, the host and port against the allow list, the method, and (for a host written as an IP address) the private-address rule |
+| `(*Policy).CheckExec(name)` | whether it may start that command (the first element of `proc-run`'s list) |
+| `(*Runtime).ModuleOf(name)` | which module installed a procedure (`"net"` for `http-request`); `""` for `require`, `modules` and `module-info` |
+
+Each returns `nil` or an error written to be shown to a person, such as `net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)`. They decide what the installed procedures decide, so a check that is looser than the installed policy cannot reach further than that policy: the installed policy stays the outer limit. A host name that resolves to a private address is stopped when the connection is made, by the installed policy's `private` setting, which is the interpreter's and not the caller's. There is no `CheckFS`, because a check on the text of a path cannot see a symbolic link, and the real containment is the operating system's (`os.Root`); give modules with different file grants different interpreters. The Gate example is in [embedding](embedding.md#different-policies-for-different-callers).

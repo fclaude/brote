@@ -62,6 +62,8 @@ type Interp struct {
 
 	// tasks is non-nil when the host gave scripts tasks (WithTasks).
 	tasks *taskRuntime
+	// taskFailed hears of detached tasks that failed unobserved (WithTaskFailed).
+	taskFailed func(Task, error)
 	// gateSem is held while a Gate that is not safe for concurrent use runs.
 	gateSem chan struct{}
 }

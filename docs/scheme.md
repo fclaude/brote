@@ -309,7 +309,7 @@ Output goes to the interpreter's output writer, which the host provides
 
 ### Tasks
 
-Available when the host gives the interpreter tasks (`scheme.WithTasks`; the `brote` command does). A task is a piece of Scheme running at the same time as the rest of the program, on its own core if there is one, sharing the program's variables, vectors and hash tables. Without the grant these names are unbound.
+Available when the host gives the interpreter tasks (`scheme.WithTasks`; the `brote` command does). A task is a piece of Scheme running at the same time as the rest of the program, on its own core if there is one, sharing the program's variables, vectors and hash tables. Without the grant these names are unbound. A task normally ends with the evaluation that started it; a host that also grants *background* tasks (see [Tasks that outlive the evaluation](#tasks-that-outlive-the-evaluation)) lets a script start ones that do not.
 
 | | |
 |---|---|
@@ -334,7 +334,7 @@ Channels carry values between tasks:
 | `(channel-for-each f ch)` | call `f` on each value until the channel is closed and empty |
 | `(on-recv ch)` `(on-recv ch eof)` `(on-send ch v)` | cases for `select` |
 | `(select cases)` `(select cases default)` | wait until one case can proceed and do it; `(index . value)`, where `value` is what was received (`#t` for a send). When several can proceed, one is picked at random, so none starves. With `default`, a procedure of no arguments, it never waits: if no case can proceed the result is `(-1 . (default))` |
-| `(after seconds)` | a channel that receives `#t` once, after that long. For timeouts: `(select (list (on-recv work) (on-recv (after 5))))` |
+| `(after seconds)` | a channel that receives `#t` once, after that long. For timeouts: `(select (list (on-recv work) (on-recv (after 5))))`. The timer ends with the evaluation that made it: a later evaluation that is handed the channel never sees it fire (`after-detached` is the one that survives) |
 
 ```lisp
 (define jobs (make-channel 8))
@@ -371,9 +371,30 @@ Waiting for several things, and sharing data safely:
 (with-timeout 5 (lambda () (http-request "GET" "https://example.com/slow")))
 ```
 
+#### Tasks that outlive the evaluation
+
+Some hosts run Scheme in short commands and want work to go on after a command returns: a lookup over the network, a link checker, a timer that delivers its result to a handler later. When the host grants *background* tasks (`TaskLimits.Background`; the `brote` command does not) there are two more procedures, and without that grant they are unbound:
+
+| | |
+|---|---|
+| `(spawn-detached thunk)` | like `spawn`, but the task belongs to the interpreter, not to the evaluation. It keeps running when the evaluation returns, and any later evaluation can `task-wait`, `task-done?` or `task-cancel!` it with the handle. Only `task-cancel!` and the host's shutdown end it |
+| `(after-detached seconds)` | like `after`, but the timer belongs to the interpreter too, so it fires for whoever is waiting on the channel, whenever they got it. Once it has fired it is an ordinary channel |
+
+```lisp
+(define lookup (spawn-detached (lambda () (http-get-json "https://api.example.com/status"))))
+; ... the command returns; a later one, or the host, asks:
+(if (task-done? lookup) (task-wait lookup) 'still-running)
+```
+
+- A detached task counts against the same task limit as any other.
+- It runs under the context the spawner had: the same origin and the same values the host attached to the evaluation (for instance, which module's code is running). It does not share the spawner's cancellation or time limit, so `with-timeout` around a `spawn-detached` bounds the spawning, not the task.
+- Tasks it starts with `spawn`, `pmap` and the rest belong to it, as an evaluation's belong to the evaluation, and end when it does.
+- **A failure no one waited for does not fail anything.** By the time it fails, the evaluation that started the task is over and a later one is unrelated. The host is told instead (`scheme.WithTaskFailed`). If something is waiting for the task when it fails, that wait gets the error; a later `task-wait` on the finished task also gets it.
+- A deadlock is reported to the evaluation that is waiting, never to a detached task: a detached task parked on a channel may be woken by a later evaluation or by the host. A host that feeds a channel from outside marks it so, and a task waiting on it is not counted as deadlocked (see [embedding](embedding.md#host-fed-channels-and-timers)).
+
 Rules:
 
-- **A task lives no longer than the evaluation that started it.** When the outermost `EvalString`, `Apply` or `LoadFile` returns, tasks still running are cancelled and waited for first. A task that failed and that nothing waited for fails the evaluation instead of being dropped; a script that wants fire-and-forget catches the error inside the thunk.
+- **A task lives no longer than the evaluation that started it,** unless it was started with `spawn-detached`. When the outermost `EvalString`, `Apply` or `LoadFile` returns, tasks still running are cancelled and waited for first. A task that failed and that nothing waited for fails the evaluation instead of being dropped; a script that wants fire-and-forget catches the error inside the thunk.
 - **Deadlock is an error.** When every task is waiting for another (on a channel, or in `task-wait`) and nothing, such as a timer or a task in a host call, can wake any of them, the task that started the evaluation gets `deadlock: all tasks are waiting for one another and none can run`, an ordinary error `guard` can catch, instead of a hang.
 - **An ordinary error in a task** is raised again by `task-wait`, where `guard` can catch it.
 - **Cancellation** cannot be caught by the task it cancels, as with a host's cancelled context. `task-wait` on a cancelled task raises an ordinary error ("task N was cancelled").
@@ -382,6 +403,7 @@ Rules:
 - **Output.** `with-output-to-string` captures only the task that asked for it. A spawned task writes to the host's output, not to its spawner's capture.
 - **Origin and taint** are inherited: a task started from a model-originated call is model-originated, and a value keeps its provenance through `task-wait`.
 - **Limits.** The host bounds the tasks alive at once (default 256) and how deeply each may nest (default 2,500); past the first, `spawn` raises an error.
+- **Context.** Whatever the host put in the context of an evaluation is visible to the primitives called from every task beneath it: `spawn`, `group-spawn`, `pmap`, `pmap-limit`, `pfor-each`, `race`, `with-timeout`, callbacks such as `map` and `sort`, and detached tasks. This is a guarantee, not an accident; see [embedding](embedding.md#context-values-reach-every-task).
 
 ### JSON
 
@@ -569,6 +591,7 @@ err = in.Register(&scheme.Prim{...})         // add a host primitive
 in.SetGate(g)                                // install the gate
 snap := in.Global().Snapshot()               // copy the global bindings
 in.Global().Restore(snap)                    // put them back, unbinding names bound since
+in.Shutdown(ctx)                             // end detached tasks and timers (TaskLimits.Background)
 ```
 
 `ctx` cancellation is checked at every primitive application; a cancelled

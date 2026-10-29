@@ -57,8 +57,12 @@ func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done f
 	if in.tasks != nil {
 		var r *root
 		ctx, r = in.tasks.newRoot(ctx)
-		t.root, t.obj = r, &taskObj{id: 0, root: r}
-		done = func(err error) error { return r.leave(err) }
+		t.root, t.obj = r, &taskObj{id: 0, root: r, done: make(chan struct{})}
+		done = func(err error) error {
+			err = r.leave(err)
+			t.obj.endMain()
+			return err
+		}
 	}
 	return t, context.WithValue(ctx, taskKey{in}, t), done
 }

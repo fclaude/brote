@@ -78,6 +78,32 @@ func (in *Interp) registerTasks() {
 	in.mustRegisterOpaque("current-task", "The task that is running this call.", nil, false, func(c *Call) (Value, error) {
 		return ObjectValue(c.t.obj), nil
 	})
+	if in.tasks.limits.Background {
+		in.mustRegister("spawn-detached", "Start a procedure of no arguments as a task that belongs to the interpreter, not to the evaluation: it keeps running after the evaluation returns, and a later evaluation can task-wait, task-done? or task-cancel! it. It runs under the context values of the caller (the same origin and whatever the host put there), but is not cancelled when the caller is; only task-cancel! and the host's Shutdown end it. If it fails and no one is waiting, the host is told rather than any evaluation failing. It counts against the task limit.",
+			[]Param{{Name: "thunk", Type: "any", Doc: "procedure of no arguments"}}, false, func(c *Call) (Value, error) {
+				thunk, err := c.Proc(0)
+				if err != nil {
+					return Value{}, err
+				}
+				return c.In.spawnDetached(c, thunk)
+			})
+		in.mustRegister("after-detached", "Like after, but the timer belongs to the interpreter: it fires even if the evaluation that made it has returned, so a later evaluation or a detached task can wait on it. Only Shutdown cancels it (closing the channel).",
+			[]Param{{Name: "seconds", Type: "number"}}, false, func(c *Call) (Value, error) {
+				n, err := c.Number(0)
+				if err != nil {
+					return Value{}, err
+				}
+				secs := n.AsFloat()
+				if secs < 0 || secs != secs || secs > 1e9 {
+					return Value{}, errorf(c.Name, "argument 1: expected 0 to 1e9 seconds, got %s", Write(n))
+				}
+				ch, err := c.In.tasks.afterDetached(time.Duration(secs * float64(time.Second)))
+				if err != nil {
+					return Value{}, errorf(c.Name, "%v", err)
+				}
+				return ObjectValue(ch), nil
+			})
+	}
 	in.registerChannels()
 	in.registerGroups()
 	in.registerLocks()

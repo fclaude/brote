@@ -18,6 +18,12 @@ type TaskLimits struct {
 	// evaluation. A task is a goroutine with its own stack, so this and
 	// MaxTasks together bound the memory tasks can use. Default 2500.
 	MaxDepth int
+	// Background also gives scripts (spawn-detached thunk) and (after-detached
+	// secs): tasks and timers owned by the interpreter, which outlive the
+	// evaluation that made them and end with Interp.Shutdown. They count
+	// against MaxTasks like any task. Off by default: a host that grants it
+	// must call Shutdown when it is done with the interpreter.
+	Background bool
 }
 
 // WithTasks gives scripts tasks: spawn, task-wait and the rest (docs/scheme.md
@@ -33,8 +39,23 @@ func WithTasks(l TaskLimits) Option {
 		if l.MaxDepth <= 0 {
 			l.MaxDepth = 2500
 		}
-		in.tasks = &taskRuntime{limits: l, parked: map[*waiter]struct{}{}}
+		in.tasks = &taskRuntime{limits: l, parked: map[*waiter]struct{}{}, detached: map[*taskObj]struct{}{}, bgTimers: map[*pendingTimer]*channelObj{}}
 	}
+}
+
+// WithTaskFailed registers fn to hear of a detached task (spawn-detached) that
+// failed with an error no one was waiting to receive. Such a failure does not
+// fail any evaluation, since the evaluation that started the task is long gone
+// and a later one is unrelated; this is where it goes instead. A task that
+// was cancelled, by task-cancel! or by Shutdown, did not fail and is not
+// reported.
+//
+// fn is called on the failed task's own goroutine, after it has finished and
+// outside every lock of the interpreter: it may call into the interpreter but
+// must not wait for a long time, and it must not call Shutdown (which waits
+// for it). Task is the failed task; its Result is the error.
+func WithTaskFailed(fn func(Task, error)) Option {
+	return func(in *Interp) { in.taskFailed = fn }
 }
 
 // taskRuntime is an interpreter's tasks.
@@ -50,6 +71,12 @@ type taskRuntime struct {
 	blocked int // of those, the ones parked waiting for another
 	timers  int // timers that will wake someone
 	parked  map[*waiter]struct{}
+
+	// Detached tasks and timers (TaskLimits.Background), under mu.
+	detached map[*taskObj]struct{}
+	bgTimers map[*pendingTimer]*channelObj
+	shutdown bool
+	bgWG     sync.WaitGroup // detached tasks running
 }
 
 // errRootDone is the cause the tasks left running when an evaluation ends are
@@ -84,10 +111,17 @@ func (rt *taskRuntime) newRoot(ctx context.Context) (context.Context, *root) {
 // task; then the evaluation's own error; then a task that failed with an error
 // no one asked for, since a silent background failure is what an orchestrator
 // least wants.
-func (r *root) leave(err error) error {
+func (r *root) leave(err error) error { return r.end(err, true) }
+
+// end is leave for a root that counts its first task in alive (an evaluation)
+// or does not (a detached task, which the runtime counts until it has published
+// its result, so a task waiting for it cannot look deadlocked in between).
+func (r *root) end(err error, evaluation bool) error {
 	r.cancel(errRootDone)
 	r.rt.mu.Lock()
-	r.rt.alive--
+	if evaluation {
+		r.rt.alive--
+	}
 	r.stopTimers()
 	r.rt.checkDeadlock()
 	r.rt.mu.Unlock()
@@ -145,9 +179,11 @@ type taskObj struct {
 	cancelled bool  // the task ended because its context was cancelled
 	cause     error // and why, when it was
 	isDone    atomic.Bool
-	joiners   []*waiter   // under rt.mu
-	observed  atomic.Bool // someone waited for it
-	group     *groupObj   // the group it belongs to, if any
+	done      chan struct{} // closed once isDone is set
+	detached  bool          // spawn-detached: it belongs to the interpreter, not an evaluation
+	joiners   []*waiter     // under rt.mu
+	observed  atomic.Bool   // someone waited for it
+	group     *groupObj     // the group it belongs to, if any
 }
 
 func (t *taskObj) Kind() string { return "task" }
@@ -195,7 +231,7 @@ func (in *Interp) startTask(c *Call, parent context.Context, g *groupObj, body t
 		return nil, errorf(c.Name, "too many tasks: the limit is %d alive at once", rt.limits.MaxTasks)
 	}
 	ctx, cancel := context.WithCancelCause(parent)
-	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, group: g}
+	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, group: g, done: make(chan struct{})}
 	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
 	ctx = context.WithValue(ctx, taskKey{in}, t)
 	rt.mu.Lock()
@@ -266,6 +302,7 @@ func (t *taskObj) finish(ctx context.Context, v Value, err error) {
 	rt.alive--
 	rt.checkDeadlock()
 	rt.mu.Unlock()
+	close(t.done)
 	t.cancel(nil)
 	rt.live.Add(-1)
 	r.wg.Done()
@@ -299,7 +336,9 @@ func (t *taskObj) wait(c *Call) (Value, error) {
 	case t.err == nil:
 		return t.val, nil
 	case t.cancelled && errors.Is(t.cause, errRootDone):
-		return Value{}, errorf(c.Name, "task %d was cancelled when the evaluation that started it ended; wait for it in that evaluation", t.id)
+		return Value{}, errorf(c.Name, "task %d was cancelled when the evaluation that started it ended; wait for it in that evaluation (spawn-detached makes a task that outlives it)", t.id)
+	case t.cancelled && errors.Is(t.cause, errShutdown):
+		return Value{}, errorf(c.Name, "task %d was cancelled when the interpreter shut down", t.id)
 	case t.cancelled:
 		return Value{}, errorf(c.Name, "task %d was cancelled", t.id)
 	}

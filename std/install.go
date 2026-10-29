@@ -48,9 +48,16 @@ type installer struct {
 	prims   []*scheme.Prim
 	closers []io.Closer
 	fs      *fsys // set by the fs module
+	module  string
+	owner   map[string]string // procedure name -> the module that installed it
 }
 
-func (s *installer) add(p *scheme.Prim) { s.prims = append(s.prims, p) }
+func (s *installer) add(p *scheme.Prim) {
+	s.prims = append(s.prims, p)
+	if s.module != "" {
+		s.owner[p.Name] = s.module
+	}
+}
 
 func (s *installer) report(module, op, target string, err error) {
 	if s.audit != nil {
@@ -66,6 +73,7 @@ type Runtime struct {
 	pol     *Policy
 	closers []io.Closer
 	fs      *fsys
+	owner   map[string]string
 }
 
 // Policy returns the grant in force, normalised, with directories made absolute.
@@ -90,7 +98,7 @@ func (r *Runtime) Close() error {
 // nothing. Call it before Freeze, once per interpreter. If it returns an error
 // the interpreter may have gained some procedures: discard it.
 func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
-	s := &installer{}
+	s := &installer{owner: map[string]string{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -108,6 +116,7 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 	}
 	for _, m := range s.pol.Granted() {
 		fn := moduleInstallers[m]
+		s.module = m
 		if fn == nil {
 			s.close()
 			return nil, fmt.Errorf("std: module %q is not available in this build", m)
@@ -117,6 +126,7 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 			return nil, fmt.Errorf("std: %s: %w", m, err)
 		}
 	}
+	s.module = ""
 	s.addIntrospection()
 	for _, pr := range s.prims {
 		if err := in.Register(pr); err != nil {
@@ -134,7 +144,7 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 			return nil, fmt.Errorf("std: prelude %s: %w", m, err)
 		}
 	}
-	return &Runtime{pol: s.pol, closers: s.closers, fs: s.fs}, nil
+	return &Runtime{pol: s.pol, closers: s.closers, fs: s.fs, owner: s.owner}, nil
 }
 
 func (s *installer) close() {
