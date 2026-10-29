@@ -288,12 +288,15 @@ What a granted command does is the command's business. Allowing `git` allows wha
 
 ## One interpreter, different grants
 
-`std.Install` takes one `Policy` per interpreter and enforces it inside the procedures. A host whose modules each declare their own grant installs the widest policy any of them may have, and narrows it per call in its `scheme.Gate`, with the caller's own policy:
+`std.Install` takes one `Policy` per interpreter and enforces it inside the procedures. A host whose modules each declare their own grant installs the widest policy any of them may have, and narrows it per call with the caller's own policy: the network with `std.WithNetCheck`, which is asked at every step of a request, and the rest in its `scheme.Gate`.
 
-| Method | Answers |
+| Function or method | Answers |
 |---|---|
+| `std.WithNetCheck(fn)` | an `Install` option: `fn(ctx, ev)` is asked, after the installed policy, before the request is sent (`std.NetRequest`), before each redirect hop with the method it uses (`std.NetRedirect`), and immediately before each socket connects, with the address it connects to (`std.NetConnect`). `ctx` carries the evaluation's values. An error refuses the step |
+| `(*Policy).CheckNetEvent(ev)` | all a `WithNetCheck` function needs: `CheckNet` for a request or a hop, `CheckAddr` for a connection |
 | `(*Policy).CheckNet(method, rawURL)` | whether a script holding this policy may send that request: `net` granted, the scheme, the host and port against the allow list, the method, and (for a host written as an IP address) the private-address rule |
+| `(*Policy).CheckAddr(host, ip)` | whether it may connect to `ip`, the address `host` resolved to: a loopback, private, link-local, multicast, unspecified or reserved one needs `(private #t)` |
 | `(*Policy).CheckExec(name)` | whether it may start that command (the first element of `proc-run`'s list) |
 | `(*Runtime).ModuleOf(name)` | which module installed a procedure (`"net"` for `http-request`); `""` for `require`, `modules` and `module-info` |
 
-Each returns `nil` or an error written to be shown to a person, such as `net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)`. They decide what the installed procedures decide, so a check that is looser than the installed policy cannot reach further than that policy: the installed policy stays the outer limit. A host name that resolves to a private address is stopped when the connection is made, by the installed policy's `private` setting, which is the interpreter's and not the caller's. There is no `CheckFS`, because a check on the text of a path cannot see a symbolic link, and the real containment is the operating system's (`os.Root`); give modules with different file grants different interpreters. The Gate example is in [embedding](embedding.md#different-policies-for-different-callers).
+Each check returns `nil` or an error written to be shown to a person, such as `net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)`. They decide what the installed procedures decide, so a check that is looser than the installed policy cannot reach further than that policy: the installed policy stays the outer limit. A Gate sees only `http-request`'s arguments, not where a redirect leads or what address a name resolves to, so the network check belongs in `WithNetCheck`. There is no `CheckFS`, because a check on the text of a path cannot see a symbolic link, and the real containment is the operating system's (`os.Root`); give modules with different file grants different interpreters. The whole pattern is in [embedding](embedding.md#different-policies-for-different-callers).

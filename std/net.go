@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,12 +22,42 @@ func init() { moduleInstallers[Net] = installNet }
 
 const maxRedirects = 5
 
+// NetStage is the step of a request a NetEvent is about.
+type NetStage string
+
+const (
+	NetRequest  NetStage = "request"  // the request the script asked for, before it is sent
+	NetRedirect NetStage = "redirect" // a redirect hop, before it is followed
+	NetConnect  NetStage = "connect"  // a connection, immediately before the socket connects
+)
+
+// NetEvent is a step the net module is about to take, given to the function
+// passed to WithNetCheck.
+type NetEvent struct {
+	Stage NetStage
+	// Method and URL are the request about to be sent, at NetRequest and
+	// NetRedirect. A redirect hop has its own method: a 301, 302 or 303 turns
+	// a POST into a GET. They are empty at NetConnect.
+	Method string
+	URL    string
+	// Host, Addr and Private are set at NetConnect. Host is the name or
+	// address the URL gave, in lower case; Addr is the address and port the
+	// socket is connecting to, what Host resolved to; Private is whether Addr
+	// is one only (private #t) reaches: loopback, private, link-local,
+	// multicast, unspecified or reserved.
+	Host    string
+	Addr    netip.AddrPort
+	Private bool
+}
+
 // netw is the http client one interpreter's scripts share. Every request,
 // and every redirect it meets, is checked against the policy before a byte
 // is sent, and every connection is checked against the address it really
-// reaches, whatever name led there.
+// reaches, whatever name led there. Each check is the installed policy's and
+// then the host's, when it gave one (WithNetCheck).
 type netw struct {
 	scope     NetScope
+	check     func(context.Context, NetEvent) error
 	client    *http.Client
 	transport *http.Transport
 }
@@ -75,28 +106,50 @@ var reservedPrefixes = func() []netip.Prefix {
 	return out
 }()
 
-// guardDial is the net.Dialer Control hook: it sees the address after name
-// resolution, immediately before the connection, so a name that resolves to a
-// private address (or changes its answer between the check and the connect) is
-// refused here.
-func guardDial(private bool) func(network, address string, _ syscall.RawConn) error {
-	return func(network, address string, _ syscall.RawConn) error {
-		if private {
-			return nil
-		}
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		ip, err := netip.ParseAddr(host)
-		if err != nil {
-			return fmt.Errorf("refusing to connect to %q: not an IP address", host)
-		}
-		if privateAddr(ip) {
-			return fmt.Errorf("refusing to connect to %s: a private or local address (the host's net policy has (private #f))", ip)
-		}
+// dial connects to address, the host and port a URL named. The dialer's
+// Control hook sees each address the name resolved to, immediately before the
+// socket connects to it, so a name that resolves to a private address (or
+// changes its answer between the check and the connect) is refused there.
+func (n *netw) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	d := net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+		return n.connect(ctx, host, address)
+	}}
+	return d.DialContext(ctx, network, address)
+}
+
+// connect judges the address a socket is about to connect to, which host
+// resolved to.
+func (n *netw) connect(ctx context.Context, host, address string) error {
+	h, p, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(h)
+	if err != nil {
+		return fmt.Errorf("refusing to connect to %q: not an IP address", h)
+	}
+	private := privateAddr(ip)
+	if private && !n.scope.Private {
+		return fmt.Errorf("refusing to connect to %s: a private or local address (the host's net policy has (private #f))", ip)
+	}
+	port, err := strconv.ParseUint(p, 10, 16)
+	if err != nil {
+		return fmt.Errorf("refusing to connect to %s: bad port %q", ip, p)
+	}
+	return n.ask(ctx, NetEvent{Stage: NetConnect, Host: host, Addr: netip.AddrPortFrom(ip, uint16(port)), Private: private})
+}
+
+// ask has the host's check judge ev, after the installed policy allowed it.
+func (n *netw) ask(ctx context.Context, ev NetEvent) error {
+	if n.check == nil {
 		return nil
 	}
+	return n.check(ctx, ev)
 }
 
 func defaultPort(scheme string) string {
@@ -185,6 +238,19 @@ func (n *netw) do(ctx context.Context, method, rawURL string, hdrs []header, bod
 	}
 	ctx, cancel := context.WithTimeout(ctx, n.scope.Timeout)
 	defer cancel()
+	if err := n.ask(ctx, NetEvent{Stage: NetRequest, Method: strings.ToUpper(method), URL: u.String()}); err != nil {
+		return scheme.Value{}, err
+	}
+	client := n.client
+	if n.check != nil {
+		// The check allowed this request's connections for this request's
+		// caller, so no other request may use them, whatever HTTP/2 would
+		// share: the request has a transport of its own.
+		t := n.newTransport()
+		t.DisableKeepAlives = true
+		defer t.CloseIdleConnections()
+		client = &http.Client{Transport: t, CheckRedirect: n.redirect}
+	}
 	var rd io.Reader
 	if hasBody {
 		rd = strings.NewReader(body)
@@ -197,7 +263,7 @@ func (n *netw) do(ctx context.Context, method, rawURL string, hdrs []header, bod
 	for _, h := range hdrs {
 		req.Header.Add(h.name, h.value)
 	}
-	resp, err := n.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return scheme.Value{}, fmt.Errorf("%s %s: %w", strings.ToUpper(method), rawURL, unwrapURL(err))
 	}
@@ -236,12 +302,35 @@ func unwrapURL(err error) error {
 	return err
 }
 
-func installNet(s *installer) error {
-	n := &netw{scope: s.pol.Net}
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: guardDial(n.scope.Private)}
-	n.transport = &http.Transport{
+// redirect is the client's CheckRedirect: req is the next hop, with the
+// method it will be sent with.
+func (n *netw) redirect(req *http.Request, via []*http.Request) error {
+	if len(via) > maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if err := n.allow(req.URL, req.Method); err != nil {
+		return fmt.Errorf("redirected to %s: %w", req.URL, err)
+	}
+	if err := n.ask(req.Context(), NetEvent{Stage: NetRedirect, Method: req.Method, URL: req.URL.String()}); err != nil {
+		return fmt.Errorf("redirected to %s: %w", req.URL, err)
+	}
+	if req.URL.Host != via[0].URL.Host {
+		// A header the script set for one host is not for another.
+		for k := range req.Header {
+			switch http.CanonicalHeaderKey(k) {
+			case "User-Agent", "Accept", "Accept-Encoding", "Content-Type":
+			default:
+				req.Header.Del(k)
+			}
+		}
+	}
+	return nil
+}
+
+func (n *netw) newTransport() *http.Transport {
+	return &http.Transport{
 		Proxy:                  nil, // the environment's proxy settings are not the policy's
-		DialContext:            dialer.DialContext,
+		DialContext:            n.dial,
 		ForceAttemptHTTP2:      true,
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  n.scope.Timeout,
@@ -249,28 +338,12 @@ func installNet(s *installer) error {
 		MaxIdleConns:           8,
 		IdleConnTimeout:        30 * time.Second,
 	}
-	n.client = &http.Client{
-		Transport: n.transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
-			}
-			if err := n.allow(req.URL, req.Method); err != nil {
-				return fmt.Errorf("redirected to %s: %w", req.URL, err)
-			}
-			if req.URL.Host != via[0].URL.Host {
-				// A header the script set for one host is not for another.
-				for k := range req.Header {
-					switch http.CanonicalHeaderKey(k) {
-					case "User-Agent", "Accept", "Accept-Encoding", "Content-Type":
-					default:
-						req.Header.Del(k)
-					}
-				}
-			}
-			return nil
-		},
-	}
+}
+
+func installNet(s *installer) error {
+	n := &netw{scope: s.pol.Net, check: s.netCheck}
+	n.transport = n.newTransport()
+	n.client = &http.Client{Transport: n.transport, CheckRedirect: n.redirect}
 	s.closers = append(s.closers, n)
 
 	pair := func(v scheme.Value) (string, string, error) {

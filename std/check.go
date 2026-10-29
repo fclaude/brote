@@ -12,13 +12,16 @@ import (
 // Install enforces one Policy inside the procedures it registers. A host that
 // runs code for several callers on one interpreter (an editor whose modules
 // each declare what they need, say) installs the widest policy any caller may
-// have and narrows it per call: its Gate asks the calling module's own Policy
-// whether this call is allowed, with CheckNet and CheckExec, and refuses with
-// the error. The messages are written to be shown to a person.
+// have and narrows it per call with the calling module's own Policy. The
+// network is narrowed by WithNetCheck, whose function asks CheckNetEvent at
+// every step of a request: the request, each redirect hop and each
+// connection. A Gate sees only http-request's arguments, so it cannot. The
+// rest is narrowed in the Gate: ModuleOf and Has for the module, CheckExec for
+// proc-run's command. The messages are written to be shown to a person.
 //
 // The installed policy stays the outer limit and is still enforced inside the
-// procedures, so a Check that is too permissive, or a call the Gate never
-// asked about, cannot reach further than the installed policy allows.
+// procedures, so a Check that is too permissive, or a call nothing asked
+// about, cannot reach further than the installed policy allows.
 // CheckFS is not offered: the file system's containment is the operating
 // system's (os.Root, which also refuses a symbolic link out of the tree), and a
 // check that only reads the path would let a link inside one module's tree
@@ -27,12 +30,12 @@ import (
 
 // CheckNet reports why a script holding p may not send an HTTP request with
 // this method to rawURL, or nil if it may. It judges what Install's net
-// module judges before a byte is sent: that net is granted, the scheme, the
-// host and port against the allow list, and the method. A host named by an IP
-// address is also refused when it is private or local and p does not have
-// (private #t). A host name that resolves to such an address is stopped when
-// the connection is made, by the installed policy, since resolving it here
-// would race the connection.
+// module judges before a byte is sent, and again before each redirect hop:
+// that net is granted, the scheme, the host and port against the allow list,
+// and the method. A host named by an IP address is also refused when it is
+// private or local and p does not have (private #t). A host name that
+// resolves to such an address is judged when the connection is made, by
+// CheckAddr, since resolving it here would race the connection.
 func (p *Policy) CheckNet(method, rawURL string) error {
 	if !p.Modules[Net] {
 		return errors.New("net: this module has not been given network access")
@@ -60,6 +63,40 @@ func (p *Policy) CheckNet(method, rawURL string) error {
 		return fmt.Errorf("net: %s is a private or local address, which this module may not reach", ip)
 	}
 	return nil
+}
+
+// CheckAddr reports why a script holding p may not connect to ip, the address
+// host resolved to, or nil if it may: a loopback, private, link-local,
+// multicast, unspecified or reserved address needs (private #t). It is the
+// check the installed net module makes when a connection is made; host is
+// only for the message.
+func (p *Policy) CheckAddr(host string, ip netip.Addr) error {
+	if !p.Modules[Net] {
+		return errors.New("net: this module has not been given network access")
+	}
+	if !ip.IsValid() {
+		return fmt.Errorf("net: %s: no address to connect to", host)
+	}
+	if p.Net.Private || !privateAddr(ip) {
+		return nil
+	}
+	if _, err := netip.ParseAddr(strings.Trim(host, "[]")); host == "" || err == nil {
+		return fmt.Errorf("net: %s is a private or local address, which this module may not reach", ip)
+	}
+	return fmt.Errorf("net: %s resolves to %s, a private or local address, which this module may not reach", host, ip)
+}
+
+// CheckNetEvent judges ev for a script holding p: CheckNet for a request or a
+// redirect hop, CheckAddr for a connection. It is all a WithNetCheck function
+// needs for a host whose callers each have a Policy.
+func (p *Policy) CheckNetEvent(ev NetEvent) error {
+	switch ev.Stage {
+	case NetRequest, NetRedirect:
+		return p.CheckNet(ev.Method, ev.URL)
+	case NetConnect:
+		return p.CheckAddr(ev.Host, ev.Addr.Addr())
+	}
+	return fmt.Errorf("net: unknown stage %q", ev.Stage)
 }
 
 // CheckExec reports why a script holding p may not start the command name (the

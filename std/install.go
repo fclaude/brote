@@ -40,16 +40,37 @@ func WithBaseDir(dir string) Option { return func(s *installer) { s.base = dir }
 // scheme.Gate is installed.
 func WithAudit(fn func(Event)) Option { return func(s *installer) { s.audit = fn } }
 
+// WithNetCheck has fn judge each network step the net module is about to take,
+// after the installed policy has allowed it: the request a script asked for,
+// every redirect hop, and every connection, at the moment it is made. fn gets
+// the request's context, which carries the values the host put in the
+// evaluation's, so a host that runs several callers on one interpreter can
+// narrow each step to the calling one's grant (Policy.CheckNetEvent). An error
+// refuses the step, and is the text the script and WithAudit see; return a
+// *scheme.Denied to make the refusal one guard cannot catch, as a Gate's is.
+// fn can only narrow: what the installed policy refuses is refused before fn
+// is asked.
+//
+// fn is called from the evaluating goroutine for a request and its redirects
+// and from the dialing goroutine for a connection, and from several at once
+// when scripts have tasks, so it must be safe for concurrent use. It should
+// honour ctx. While it is set, a request's connections serve that request
+// alone: a connection fn allowed for one caller never carries another's.
+func WithNetCheck(fn func(ctx context.Context, ev NetEvent) error) Option {
+	return func(s *installer) { s.netCheck = fn }
+}
+
 // installer is what a module's install function works with.
 type installer struct {
-	pol     *Policy // resolved and normalised; the module's scope is read from it
-	base    string
-	audit   func(Event)
-	prims   []*scheme.Prim
-	closers []io.Closer
-	fs      *fsys // set by the fs module
-	module  string
-	owner   map[string]string // procedure name -> the module that installed it
+	pol      *Policy // resolved and normalised; the module's scope is read from it
+	base     string
+	audit    func(Event)
+	netCheck func(context.Context, NetEvent) error
+	prims    []*scheme.Prim
+	closers  []io.Closer
+	fs       *fsys // set by the fs module
+	module   string
+	owner    map[string]string // procedure name -> the module that installed it
 }
 
 func (s *installer) add(p *scheme.Prim) {

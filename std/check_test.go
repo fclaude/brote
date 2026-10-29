@@ -14,13 +14,36 @@ import (
 
 type callerKey struct{}
 
-// callerGate is the kind of Gate an editor writes: the policy comes from the
-// caller (here, a *Policy in the context) and the install-wide one is the
-// widest any caller may have.
+// callerOf is the policy of the caller an evaluation runs for, which the host
+// put in its context; nil for the host's own evaluations.
+func callerOf(ctx context.Context) *Policy {
+	p, _ := ctx.Value(callerKey{}).(*Policy)
+	return p
+}
+
+func asCaller(p *Policy) context.Context {
+	return context.WithValue(context.Background(), callerKey{}, p)
+}
+
+// callerCheck and callerGate are what an editor writes: the policy comes from
+// the caller (here, a *Policy in the context) and the install-wide one is the
+// widest any caller may have. callerCheck, given to WithNetCheck, judges every
+// step of a request; it refuses with a Denied, as the Gate does.
+func callerCheck(ctx context.Context, ev NetEvent) error {
+	caller := callerOf(ctx)
+	if caller == nil {
+		return nil
+	}
+	if err := caller.CheckNetEvent(ev); err != nil {
+		return &scheme.Denied{Prim: "http-request", Reason: err.Error()}
+	}
+	return nil
+}
+
 type callerGate struct{ rt *Runtime }
 
 func (g callerGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
-	caller, _ := ctx.Value(callerKey{}).(*Policy)
+	caller := callerOf(ctx)
 	if caller == nil {
 		return nil
 	}
@@ -29,11 +52,6 @@ func (g callerGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Va
 		return deny(fmt.Errorf("%s: this module has not been granted %s", p.Name, m))
 	}
 	switch p.Name {
-	case "http-request":
-		method, _ := atom(args[0])
-		if err := caller.CheckNet(method, args[1].S); err != nil {
-			return deny(err)
-		}
 	case "proc-run":
 		if items, ok := args[0].Slice(); ok && len(items) > 0 {
 			if err := caller.CheckExec(items[0].S); err != nil {
@@ -51,7 +69,7 @@ func (callerGate) ConcurrentSafe()                                              
 func TestAPolicyPerCallerAllowsOneAndDeniesAnother(t *testing.T) {
 	srv, port := serve(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "hello") })
 	wide := mustParse(t, fmt.Sprintf(`(policy (net (allow "127.0.0.1:%s" "other.example.com") (methods get post) (private #t)) (exec (allow "echo")))`, port))
-	in, rt := taskInterp(t, wide)
+	in, rt := taskInterp(t, wide, WithNetCheck(callerCheck))
 	in.SetGate(callerGate{rt})
 
 	a := mustParse(t, fmt.Sprintf(`(policy (net (allow "127.0.0.1:%s") (private #t)))`, port))
@@ -59,8 +77,7 @@ func TestAPolicyPerCallerAllowsOneAndDeniesAnother(t *testing.T) {
 	c := mustParse(t, `(policy (path))`) // no net at all
 	req := fmt.Sprintf(`(assoc-ref (http-get %q) "body")`, srv.URL)
 
-	as := func(p *Policy) context.Context { return context.WithValue(context.Background(), callerKey{}, p) }
-	v, err := in.EvalString(as(a), req)
+	v, err := in.EvalString(asCaller(a), req)
 	if err != nil || scheme.Write(v) != `"hello"` {
 		t.Fatalf("caller a: %s, %v", scheme.Write(v), err)
 	}
@@ -68,10 +85,10 @@ func TestAPolicyPerCallerAllowsOneAndDeniesAnother(t *testing.T) {
 		ctx  context.Context
 		want string
 	}{
-		"b: another host":    {as(b), "is not a host this module may reach (allowed hosts: other.example.com)"},
-		"c: no net module":   {as(c), "has not been granted net"},
-		"a: method it lacks": {as(a), "method POST is not allowed for this module (allowed: GET HEAD)"},
-		"a: a command":       {as(a), "has not been granted exec"},
+		"b: another host":    {asCaller(b), "is not a host this module may reach (allowed hosts: other.example.com)"},
+		"c: no net module":   {asCaller(c), "has not been granted net"},
+		"a: method it lacks": {asCaller(a), "method POST is not allowed for this module (allowed: GET HEAD)"},
+		"a: a command":       {asCaller(a), "has not been granted exec"},
 	} {
 		src := req
 		switch name[:1] {

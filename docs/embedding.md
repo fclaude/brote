@@ -287,27 +287,50 @@ func (l *Loop) onMessage(ch scheme.Channel, handler scheme.Value) {
 
 ### Different policies for different callers
 
-`std.Install` enforces one `Policy` per interpreter inside the primitives. A host that runs several modules, each with its own grant (`(requires (net (allow "api.example.com") (methods get)))`), installs the widest policy any of them may have and narrows it per call in its own `Gate`, using the calling module's `*std.Policy`:
+`std.Install` enforces one `Policy` per interpreter inside the primitives. A host that runs several modules, each with its own grant (`(requires (net (allow "api.example.com") (methods get)))`), installs the widest policy any of them may have and narrows it to the calling module's `*std.Policy` in two places:
+
+- **The network, with `std.WithNetCheck`.** A request is more than its arguments: a redirect leads to another URL, perhaps with another method, and a host name becomes an address only when the connection is made. The check judges each of those steps, with the request's context, which carries the evaluation's values (from tasks too), so it knows the caller.
+- **The rest, in the `Gate`**: whether the caller has the module at all, and the command `proc-run` starts.
 
 ```go
-func (g *myGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+rt, err := std.Install(in, widest, std.WithNetCheck(func(ctx context.Context, ev std.NetEvent) error {
     caller := policyOf(ctx) // from the value Coigüe put in the context
+    if caller == nil {
+        return nil // the host's own evaluations: the installed policy alone
+    }
+    if err := caller.CheckNetEvent(ev); err != nil {
+        return &scheme.Denied{Prim: "http-request", Reason: err.Error()}
+    }
+    return nil
+}))
+
+func (g *myGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+    caller := policyOf(ctx)
     if m := g.rt.ModuleOf(p.Name); m != "" && !caller.Has(m) {
         return &scheme.Denied{Prim: p.Name, Reason: "this module has not been granted " + m}
     }
-    switch p.Name {
-    case "http-request":
-        if err := caller.CheckNet(args[0].S, args[1].S); err != nil {
-            return &scheme.Denied{Prim: p.Name, Reason: err.Error()}
-        }
-    case "proc-run":
+    if p.Name == "proc-run" {
         // CheckExec(argv[0])
     }
     return nil
 }
 ```
 
-`(*Policy).CheckNet(method, rawURL)` and `CheckExec(name)` return an error written for a person ("net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)") and make the same decision the installed procedures do. The installed policy stays the outer limit, so a check that is too loose cannot reach past it. `Runtime.ModuleOf(procedureName)` names the module a procedure came from. **There is no `CheckFS`**: the file system's containment is the operating system's (`os.Root`, which refuses a symbolic link out of the tree), and a check that only reads the path would let a link inside one module's tree lead into another's. For different file trees install different interpreters. `TestAPolicyPerCallerAllowsOneAndDeniesAnother` is the example, running against a real server.
+The check is asked at three stages, each after the installed policy has allowed it, so it can only narrow:
+
+| `ev.Stage` | When | Fields |
+|---|---|---|
+| `std.NetRequest` | before the request is sent | `Method`, `URL` |
+| `std.NetRedirect` | before each redirect hop is followed | `Method`, `URL` of the hop. A 301, 302 or 303 turns a POST into a GET, and the hop is judged with the method it is sent with |
+| `std.NetConnect` | immediately before each socket connects, on the dialer's hook that already guards the installed policy | `Host` (the name the URL gave), `Addr` (the address and port being connected to), `Private` |
+
+`(*Policy).CheckNetEvent(ev)` is `CheckNet(method, url)` for the first two and `CheckAddr(host, ip)` for the third, which refuses a loopback, private, link-local, multicast, unspecified or reserved address unless the policy says `(private #t)`. The address is the one the socket is connecting to, not one looked up earlier, so a name whose answer changes between the request and the connection is judged by the answer used. An error refuses the step; it is what the script sees and what `WithAudit` records. Returning a `*scheme.Denied`, as above, makes the refusal one `guard` cannot catch, as the Gate's is; a plain error is catchable, like the installed policy's own refusals. Headers the script set are still dropped when a redirect changes host.
+
+While a check is installed, a request's connections serve that request alone (no keep-alive, no shared HTTP/2 connection), since a connection the check allowed for one caller must not carry another's request. The function is called from several goroutines at once, the dialer's among them, so it must be safe for that, and should honour `ctx`. A host that passes no check behaves as before.
+
+**Why not the Gate alone.** Up to v0.7, checking `http-request`'s arguments with `CheckNet` in the Gate was the pattern shown here. The Gate sees the arguments and nothing after them, so a redirect from a host the caller may reach went on to any host the *installed* policy allowed, and a name that resolves to a loopback address got through for a caller without `(private #t)` whenever the installed policy had it. A Gate that still checks `http-request` is harmless, but it is not enough: move the network check to `WithNetCheck`.
+
+`CheckNet`, `CheckAddr` and `CheckExec` return an error written for a person ("net: evil.com:443 is not a host this module may reach (allowed hosts: api.example.com)") and make the same decision the installed procedures do. The installed policy stays the outer limit, so a check that is too loose cannot reach past it. `Runtime.ModuleOf(procedureName)` names the module a procedure came from. **There is no `CheckFS`**: the file system's containment is the operating system's (`os.Root`, which refuses a symbolic link out of the tree), and a check that only reads the path would let a link inside one module's tree lead into another's. For different file trees install different interpreters. `TestAPolicyPerCallerAllowsOneAndDeniesAnother` is the example, running against a real server; `std/netcheck_test.go` has the redirect, the loopback name and the method of a hop.
 
 ## Cancellation and limits
 
@@ -433,4 +456,5 @@ Nodwyn's imports, so it waits for a minor version.
 | Context values reach every kind of task | `TestTheHostsContextValueIsVisibleInEveryKindOfTask`, `TestContextValuesDoNotCrossBetweenEvaluations` |
 | Closures, module environments and `ConcurrentGate` under concurrency | `TestClosuresAndModuleEnvironmentsAreSafeWhileOtherEvaluationsRun`, `TestAConcurrentGateIsCalledWithoutTheInterpretersLock` |
 | The event-loop pattern | `TestTheEventLoopPatternOfTheMigrationNote` |
-| A policy per caller | `TestAPolicyPerCallerAllowsOneAndDeniesAnother`, `TestCheckNetAgreesWithTheInstalledPolicy`, `TestCheckExec` (`std/check_test.go`) |
+| A policy per caller | `TestAPolicyPerCallerAllowsOneAndDeniesAnother`, `TestCheckNetAgreesWithTheInstalledPolicy`, `TestCheckExec` (`std/check_test.go`), `TestCheckAddr` |
+| The caller's network check holds at every redirect hop and connection, and only narrows | `TestANetCheckRefusesARedirectOutsideTheCallersGrant`, `TestANetCheckJudgesTheAddressANameResolvesToForEachCaller`, `TestANetCheckJudgesTheMethodOfEachHop`, `TestANetCheckCannotWidenTheInstalledPolicy`, `TestANetCheckIsAskedAtEveryStepWithTheCallersContext` (`std/netcheck_test.go`) |
