@@ -25,6 +25,7 @@ import (
 )
 
 const usage = `usage: brote [OPTION...] [-e EXPR | FILE...] [-- ARG...]
+       brote [OPTION...] test [-v] [PATH...]
        brote -version
 
 With no arguments brote reads Scheme from standard input and evaluates it,
@@ -36,6 +37,11 @@ session.
   -e EXPR     evaluate EXPR and print its value unless it is void
   -- ARG...   arguments for the script: (command-line) returns them as strings
   -version    print the version
+  test        run tests: each PATH is a file, or a directory searched for *_test.scm
+              files (default "."). Every file runs in an interpreter of its own and
+              the tests in it (see test, assert-equal and assert in the language
+              reference) are reported; -v lists the passing ones too. The status is 1
+              if anything failed. The options below apply to the tests.
 
 What a script can reach (the standard library's modules; see docs/capabilities.md):
 
@@ -70,6 +76,11 @@ func main() {
 // run is main with its streams made explicit, so a test can drive it.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	args, scriptArgs := splitScriptArgs(args)
+	testMode := false
+	if i := testWord(args); i >= 0 {
+		testMode = true
+		args = append(append([]string(nil), args[:i]...), args[i+1:]...)
+	}
 	fs := flag.NewFlagSet("brote", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	expr := fs.String("e", "", "")
@@ -77,6 +88,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	sandbox := fs.Bool("sandbox", false, "")
 	policyFile := fs.String("policy", "", "")
 	printPolicy := fs.Bool("print-policy", false, "")
+	verbose := fs.Bool("v", false, "")
 	var allow, deny listFlag
 	fs.Var(&allow, "allow", "")
 	fs.Var(&deny, "deny", "")
@@ -96,6 +108,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, buildversion.Line("brote"))
 		return 0
 	}
+	if given["v"] && !testMode {
+		fmt.Fprintf(stderr, "brote: -v belongs to the test command\n\n%s", usage)
+		return 2
+	}
+	if testMode && (given["e"] || len(scriptArgs) > 0) {
+		fmt.Fprintf(stderr, "brote: test takes paths, not -e or --\n\n%s", usage)
+		return 2
+	}
 	if given["e"] && len(files) > 0 {
 		fmt.Fprintf(stderr, "brote: -e takes an expression, not files\n\n%s", usage)
 		return 2
@@ -109,6 +129,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *printPolicy {
 		fmt.Fprintln(stdout, pol.Pretty())
 		return 0
+	}
+
+	restricted := *sandbox || *policyFile != "" || len(allow) > 0 || len(deny) > 0
+	if testMode {
+		return runTests(files, pol, restricted, *verbose, stdout, stderr)
 	}
 
 	interactive := !given["e"] && len(files) == 0
@@ -132,7 +157,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer rt.Close()
-	if *sandbox || *policyFile != "" || len(allow) > 0 || len(deny) > 0 {
+	if restricted {
 		// load would otherwise read any file the person can; keep it inside the grant.
 		in.SetGate(rt.Gate(nil))
 	}
@@ -204,4 +229,25 @@ func historyPath() string {
 		return filepath.Join(home, ".brote_history")
 	}
 	return ""
+}
+
+// testWord is the position in args of the word "test" that makes the command
+// run tests: the first argument that is not an option or an option's value. -1
+// if there is none. (To run a script called test, write ./test.)
+func testWord(args []string) int {
+	valued := map[string]bool{"-e": true, "-policy": true, "-allow": true, "-deny": true}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "test":
+			return i
+		case len(a) > 1 && a[0] == '-':
+			if valued[a] {
+				i++ // its value
+			}
+		default:
+			return -1
+		}
+	}
+	return -1
 }

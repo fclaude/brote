@@ -612,6 +612,9 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 					if err != nil {
 						return Value{}, err
 					}
+					if loc := x.P.loc; loc != nil && !loc.isLibrary() {
+						at = loc // an error in the expansion is reported at the use
+					}
 					x = nx
 					continue
 				}

@@ -7,6 +7,7 @@ brote                 a REPL on standard input
 brote FILE...         run files, in order, in one interpreter
 brote -e EXPR         evaluate an expression and print its value
 brote FILE -- ARG...  everything after -- is for the script
+brote test [PATH...]  run files of tests and report what failed
 brote -sandbox FILE   run with no access to files, network or programs
 brote -allow SPEC ... run with only what SPEC names
 brote -version
@@ -131,6 +132,24 @@ A file that doesn't exist is an error like any other:
 $ brote -e '(read-file "missing.txt")'
 brote: read-file: missing.txt: no such file or directory
 ```
+
+## Running tests
+
+`brote test` runs files of tests. Each `PATH` is a file, or a directory that is searched, folders and all, for files whose names end in `_test.scm`; with no path it searches the current directory. A file is written with the [test forms](stdlib.md#tests): `test` for each thing that should be true, and `assert-equal`, `assert` and `assert-error` inside it.
+
+<!-- run-shell -->
+```console
+$ printf '(define (double x) (* 2 x))\n(test "doubles" (assert-equal 4 (double 2)))\n(test "triples" (assert-equal 9 (double 3)))\n' > math_test.scm
+$ brote test math_test.scm
+FAIL  math_test.scm  (2 tests)
+      FAIL  triples
+            math_test.scm:3:17: assert-equal failed: (double 3) "expected" 9 "got" 6
+1 file, 2 tests, 1 failed
+```
+
+Every file runs in an interpreter of its own, so one file cannot see what another defined, and a test that changes global state cannot break the ones in other files. What a file prints is shown only when something in it failed. `-v` lists the tests that passed too. A failing test shows the position of the failed assertion, then the procedures it was in, as an [uncaught error](#when-a-script-fails) does. An error outside any test, such as a file that does not read or a failure at the top of the file, is reported as `error outside a test`; the tests that ran before it still count.
+
+The status is 0 if every test passed, 1 if any failed (or a file could not run to the end, or there was nothing to run), and 2 for a path that cannot be read. The [options that limit a script](#what-a-script-can-reach) apply to the tests: `brote -sandbox test` runs them with no access to files, network or programs. To run a script called `test`, write `./test`.
 
 ## What a script can reach
 

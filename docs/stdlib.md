@@ -161,6 +161,35 @@ A string port lets code read a string a piece at a time, and `read` parses the d
 "hello \"world\""
 ```
 
+## Tests
+
+A file of tests is a Scheme file that says what should be true. `brote test` runs the files and reports what failed, with the place of each failure (the [command page](command.md#running-tests) shows it). The forms below are what the files are written with.
+
+| Form | What it does |
+|---|---|
+| `(test name body …)` | run `body …` and record that it passed, or the error that stopped it. A failing test does not stop the ones after it |
+| `(assert expr)` `(assert expr message)` | an error if `expr` is false: `assertion failed: ` and the expression, or `message` and the expression |
+| `(assert-equal expected expr)` | an error unless `expr` is `equal?` to `expected`; it shows the expression, what was expected and what came out |
+| `(assert-error expr)` `(assert-error expr text)` | an error unless evaluating `expr` raises one; with `text`, one whose message mentions it |
+| `test-results` | a procedure of no arguments, `(test-results)`: what the tests so far did, oldest first, as a list of `(name passed? message where trace)` |
+| `(run-test name thunk)` | what `test` does, for a procedure of no arguments |
+
+These are for tests: `assert` and the others raise an ordinary error when they fail, so they work anywhere, and `test` is the part that catches it:
+
+<!-- run -->
+```lisp
+(define (square x) (* x x))
+(test "squares" (assert-equal 9 (square 3)))
+(test "negatives" (assert-equal 9 (square -3)))
+(test "off by one" (assert-equal 10 (square 3)))
+(test "bad input" (assert-error (square "x")))
+(map (lambda (r) (list (car r) (cadr r))) (test-results))
+```
+
+```text
+(("squares" #t) ("negatives" #t) ("off by one" #f) ("bad input" #t))
+```
+
 ## Vectors
 
 A vector is an indexed array you can change in place. Brote has no `make-vector`, so you build one with `vector` or `list->vector`.

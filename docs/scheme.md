@@ -603,6 +603,7 @@ environment before anything else. It defines, in Scheme:
 | `(string-pad-left s n [pad])` `(string-pad-right s n [pad])` | add `pad` (default `" "`) at the left or right until `s` is at least `n` runes long; never cuts |
 | `(vector-map f v)` `(vector-for-each f v)` | `map` and `for-each` over one vector (`vector-map` makes a new vector) |
 | `(string-empty? s)` | |
+| `(test name body …)` `(assert expr)` `(assert-equal expected expr)` `(assert-error expr [text])` `(test-results)` `(run-test name thunk)` | testing, written in Scheme; see [stdlib.md](stdlib.md#tests). The first four are macros |
 
 ## 7. Primitives and the gate
 
