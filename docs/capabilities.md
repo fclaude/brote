@@ -60,7 +60,8 @@ A policy is `(policy clause …)`. A clause is a module name with optional field
 | `(profile pure)` | `path` `encoding` `regexp` `digest`: deterministic, no clock, nothing outside the process | |
 | `(profile safe)` | `pure` plus `time` and `rand` | |
 | `(profile full)` | every module, unscoped | |
-| `(path)` `(encoding)` `(regexp)` `(digest)` `(rand)` | the module | none |
+| `(path)` `(encoding)` `(regexp)` `(rand)` | the module | none |
+| `(digest)` `(digest (keys HEX …))` | the digests, `hmac-sha256`, and `ed25519-`/`ecdsa-` sign and verify | `(keys HEX …)` names the public keys, hex, that `…-verify` accepts, or `*` for any. Without it the module hashes and signs but verifies nothing: an unnamed key is an error, not a `#f` |
 | `(time)` | the module | `(max-sleep D)`, default 10s |
 | `(env …)` | `env-get`, `env-list` | `(allow NAME …)` or `(allow *)` |
 | `(fs …)` | the `fs-` procedures | `(read PATH …)` `(write PATH …)` `(max-file SIZE)`, default 16MB. `*` means the whole file system. Write includes read |

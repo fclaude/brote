@@ -143,6 +143,11 @@ Each takes a string and gives lower-case hex of the digest of its UTF-8 bytes.
 | `(sha256 text)` `(sha512 text)` | the SHA-2 digests |
 | `(sha1 text)` `(md5 text)` | for checksums and old formats. They are broken as security measures |
 | `(hmac-sha256 key message)` | the HMAC-SHA-256 of the message under the key |
+| `(ed25519-sign private-key message)` | the Ed25519 signature, hex. The key is 64 bytes (a full private key) or 32 bytes (a seed), hex |
+| `(ed25519-verify public-key message signature)` | `#t` or `#f`. The public key (32 bytes, hex) must be one the policy granted with `(digest (keys …))`; a key it does not name is an error |
+| `(ecdsa-sign private-key message)` `(ecdsa-verify public-key message signature)` | the same for ECDSA P-256: the private key is a 32-byte scalar, the public key a compressed point, the signature DER, all hex |
+
+Signing needs no grant: the private key is the caller's own credential, and a gate sees it as one. Verifying is authorization, so the policy names the public keys a script may verify with, `(digest (keys "hex" …))` or `(keys *)`; a signature that does not verify is `#f`, a key the policy does not grant is an error.
 
 <!-- run -->
 ```lisp

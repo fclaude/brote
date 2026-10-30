@@ -4,6 +4,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/fclaude/brote/scheme"
@@ -46,6 +47,7 @@ type Policy struct {
 	Net     NetScope
 	Exec    ExecScope
 	Time    TimeScope
+	Digest  DigestScope
 }
 
 // EnvScope names the environment variables env-get and env-list can see.
@@ -92,6 +94,27 @@ type TimeScope struct {
 	MaxSleep time.Duration
 }
 
+// DigestScope names the public keys the digest module's verify procedures
+// accept, as lower-case hex (an Ed25519 key is 32 bytes, an ECDSA P-256
+// compressed point 33). Signing needs no grant: the private key is the
+// caller's own credential. With no keys the module hashes and signs but
+// verifies nothing — a key the policy does not name is an error, not a #f.
+type DigestScope struct {
+	Any  bool
+	Keys []string
+}
+
+// grantedText renders the key list for an error message.
+func (d DigestScope) grantedText() string {
+	if d.Any {
+		return "*"
+	}
+	if len(d.Keys) == 0 {
+		return "none"
+	}
+	return strings.Join(d.Keys, ", ")
+}
+
 // Default caps, applied to any limit a policy leaves unset.
 const (
 	defMaxFile   = 16 * mib
@@ -117,6 +140,7 @@ func (p *Policy) Clone() *Policy {
 	c.Net.Methods = slices.Clone(p.Net.Methods)
 	c.Exec.Allow = slices.Clone(p.Exec.Allow)
 	c.Exec.Env.Allow = slices.Clone(p.Exec.Env.Allow)
+	c.Digest.Keys = slices.Clone(p.Digest.Keys)
 	return &c
 }
 
@@ -190,6 +214,9 @@ func (p *Policy) normalize() {
 	if !p.Modules[Time] {
 		p.Time = TimeScope{}
 	}
+	if !p.Modules[Digest] {
+		p.Digest = DigestScope{}
+	}
 	p.Env.Allow = set(p.Env.Allow)
 	p.FS.Read, p.FS.Write = set(p.FS.Read), set(p.FS.Write)
 	// Write includes read, so a read entry a write entry covers says nothing,
@@ -208,6 +235,7 @@ func (p *Policy) normalize() {
 	}
 	p.Net.Allow, p.Net.Methods = set(p.Net.Allow), set(p.Net.Methods)
 	p.Exec.Allow, p.Exec.Env.Allow = set(p.Exec.Allow), set(p.Exec.Env.Allow)
+	p.Digest.Keys = set(p.Digest.Keys)
 	if p.Modules[FS] && p.FS.MaxFile == 0 {
 		p.FS.MaxFile = defMaxFile
 	}
@@ -258,6 +286,7 @@ func (p *Policy) profile(name string) bool {
 		p.Net = NetScope{Any: true, Methods: slices.Clone(allMethods), Private: true, MaxBody: 256 * mib, Timeout: 5 * time.Minute}
 		p.Exec = ExecScope{Any: true, Env: EnvScope{Any: true}, Timeout: 10 * time.Minute, MaxOutput: 64 * mib}
 		p.Time = TimeScope{MaxSleep: time.Hour}
+		p.Digest = DigestScope{Any: true}
 	default:
 		return false
 	}
@@ -402,6 +431,10 @@ func (p *Policy) clause(m string) scheme.Value {
 			scheme.Cons(scheme.Sym("env"), scheme.List(field("allow", strs(p.Exec.Env.Any, p.Exec.Env.Allow)...))))
 	case Time:
 		items = append(items, field("max-sleep", dur(p.Time.MaxSleep)))
+	case Digest:
+		if p.Digest.Any || len(p.Digest.Keys) > 0 {
+			items = append(items, field("keys", strs(p.Digest.Any, p.Digest.Keys)...))
+		}
 	}
 	return scheme.List(items...)
 }

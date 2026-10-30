@@ -1,6 +1,7 @@
 package std
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -159,9 +160,25 @@ func (p *Policy) parseModule(m string, args []scheme.Value) error {
 	// A section replaces what a profile gave the module.
 	p.Modules[m] = true
 	switch m {
-	case Path, Encoding, Regexp, Digest, Rand:
+	case Path, Encoding, Regexp, Rand:
 		if len(args) > 0 {
 			return errors.New("takes no fields")
+		}
+	case Digest:
+		if err := only(f, "keys"); err != nil {
+			return err
+		}
+		p.Digest = DigestScope{}
+		var err error
+		if p.Digest.Keys, p.Digest.Any, err = allowList(f, "keys"); err != nil {
+			return err
+		}
+		for i, k := range p.Digest.Keys {
+			k = strings.ToLower(k)
+			if b, err := hex.DecodeString(k); err != nil || len(b) == 0 {
+				return fmt.Errorf("key %q is not hex", k)
+			}
+			p.Digest.Keys[i] = k
 		}
 	case Time:
 		if err := only(f, "max-sleep"); err != nil {

@@ -92,6 +92,12 @@ func (p *Policy) Intersect(req *Policy) (*Policy, []string) {
 	if eff.Modules[Time] {
 		eff.Time = TimeScope{MaxSleep: min(h.Time.MaxSleep, r.Time.MaxSleep)}
 	}
+	if eff.Modules[Digest] {
+		keys, ref := meet(strSet{h.Digest.Any, h.Digest.Keys}, strSet{r.Digest.Any, r.Digest.Keys}, equalCovers)
+		eff.Digest = DigestScope{Any: keys.any, Keys: keys.items}
+		note("digest key", ref)
+		// Hashing and signing need no keys, so an empty key list keeps the module.
+	}
 	eff.normalize()
 	return eff, refused
 }
