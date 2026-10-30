@@ -2,6 +2,7 @@ package std
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -47,7 +48,10 @@ func (s *serverObj) stop() error {
 	// closed here too, since the Serve goroutine may not have started yet and
 	// would leave the port accepting until it did.
 	_ = s.ln.Close()
-	return s.hs.Close()
+	if err := s.hs.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err // the listener is already closed above; that is not a failure
+	}
+	return nil
 }
 
 // handle serves one request: look up the route, cap the body, call the Scheme
