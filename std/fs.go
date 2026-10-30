@@ -505,5 +505,5 @@ func installFS(s *installer) error {
 			return scheme.Void, err
 		},
 	})
-	return nil
+	return installWatch(s)
 }

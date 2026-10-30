@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fclaude/brote/scheme"
 )
@@ -285,4 +286,98 @@ func TestRuntimeReadFile(t *testing.T) {
 	if _, err := rt.ReadFile("secret.txt"); err == nil {
 		t.Error("ReadFile reached outside the grant")
 	}
+}
+
+func TestWatch(t *testing.T) {
+	dir := t.TempDir()
+	pol := fmt.Sprintf(`(policy (fs (read %q) (write %q)))`, dir, dir)
+	in := scheme.New()
+	rt, err := Install(in, mustParse(t, pol))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	eval := func(src string) (scheme.Value, error) {
+		return in.EvalString(context.Background(), src)
+	}
+	mustEval := func(src string) scheme.Value {
+		t.Helper()
+		v, err := eval(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		return v
+	}
+	drain := func() []string {
+		t.Helper()
+		v := mustEval(`(fs-watch-changes w)`)
+		items, _ := v.Slice()
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			out = append(out, it.S)
+		}
+		return out
+	}
+	// seen polls until name shows up in the drained changes, or the deadline.
+	seen := func(name string) bool {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, n := range drain() {
+				if n == name {
+					return true
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return false
+	}
+
+	if _, err := eval(fmt.Sprintf(`(define w (fs-watch %q 0.05))`, dir)); err != nil {
+		t.Fatalf("fs-watch: %v", err)
+	}
+	if got := mustEval(`(watch? w)`); !scheme.Eqv(got, scheme.True) {
+		t.Errorf("(watch? w) => %s, want #t", scheme.Write(got))
+	}
+	// An untouched directory reports nothing.
+	time.Sleep(200 * time.Millisecond)
+	if got := drain(); len(got) != 0 {
+		t.Errorf("untouched dir reported %v, want none", got)
+	}
+	// Creating, then modifying, then removing a file reports that path.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !seen("a.txt") {
+		t.Error("the watch did not report the created file within one interval")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("two!!"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !seen("a.txt") {
+		t.Error("the watch did not report the modified file")
+	}
+	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if !seen("a.txt") {
+		t.Error("the watch did not report the removed file")
+	}
+	// Stopping ends it; the object is still a watch.
+	if _, err := eval(`(fs-watch-stop! w)`); err != nil {
+		t.Fatalf("fs-watch-stop!: %v", err)
+	}
+	if got := mustEval(`(watch? w)`); !scheme.Eqv(got, scheme.True) {
+		t.Errorf("(watch? w) after stop => %s, want #t", scheme.Write(got))
+	}
+
+	// A path outside the grant is an error, not a watch.
+	_, err = eval(`(fs-watch "/etc" 1)`)
+	if err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("watching /etc: %v, want an outside-the-grant error", err)
+	}
+	// Without the fs grant the names do not exist.
+	expectErr(t, `(policy (profile safe))`, map[string]string{
+		`(fs-watch "." 1)`: "unbound variable: fs-watch",
+	})
 }

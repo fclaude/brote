@@ -84,6 +84,7 @@ Strings are text, so what is encoded is the UTF-8 bytes of a string, and what is
 | `(url-encode text)` `(url-decode text)` | escaping for a URL query value: a space is `+`, reserved characters are `%XX` |
 | `(csv-parse text [delimiter])` | a list of rows, each a list of strings. Quotes, doubled quotes and newlines inside quotes are handled |
 | `(csv-emit rows [delimiter])` | CSV text for a list of rows whose cells are strings or numbers |
+| `(ini-parse text)` | a list of `(section entries…)` pairs in order: `[section]` headers, `key=value` lines, `;`/`#` comments, a valueless key with value `""`, keys before any header in the `""` section |
 
 <!-- run -->
 ```lisp
@@ -222,6 +223,10 @@ Files and directories, inside the trees the host granted. A path is taken agains
 | `(fs-mkdir path)` | make the directory and any missing parents. One that exists is fine |
 | `(fs-remove path)` | delete a file or an empty directory. There is no recursive delete |
 | `(fs-rename from to)` | move within one granted tree, replacing a file that is there |
+| `(fs-watch path [interval])` | a watch over a granted directory, polled every `interval` seconds (default 1) |
+| `(fs-watch-changes watch)` | the names that appeared, changed or were removed since the last call, sorted; drains the queue |
+| `(fs-watch-stop! watch)` | stop the watch; void |
+| `(watch? x)` | |
 
 A script writes, reads back, lists and cleans up:
 

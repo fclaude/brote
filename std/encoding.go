@@ -206,5 +206,64 @@ func installEncoding(s *installer) error {
 			return scheme.Str(sb.String()), w.Error()
 		},
 	})
+	s.add(&scheme.Prim{
+		Name: "ini-parse",
+		Meta: scheme.Meta{
+			Doc: "Parse INI text into a list of (section entries...) pairs in order of first appearance: [section] headers, key=value lines, ; or # comment lines, and a valueless key whose value is \"\". Keys before any header are in the \"\" section. Whitespace around names and values is stripped and a duplicate key keeps its last value.",
+			Params: text,
+		},
+		Handler: func(c *scheme.Call) (scheme.Value, error) {
+			in, err := c.String(0)
+			if err != nil {
+				return scheme.Value{}, err
+			}
+			var out []scheme.Value
+			sections := map[string][]scheme.Value{}
+			var order []string
+			ensure := func(name string) {
+				if _, ok := sections[name]; !ok {
+					sections[name] = nil
+					order = append(order, name)
+				}
+			}
+			cur := ""
+			for _, raw := range strings.Split(in, "\n") {
+				line := strings.TrimSpace(strings.TrimRight(raw, "\r"))
+				if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if strings.HasPrefix(line, "[") {
+					if !strings.HasSuffix(line, "]") || len(line) < 3 {
+						return scheme.Value{}, fmt.Errorf("bad INI section header: %q", raw)
+					}
+					cur = strings.TrimSpace(line[1 : len(line)-1])
+					ensure(cur)
+					continue
+				}
+				k, v, _ := strings.Cut(line, "=")
+				k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+				if k == "" {
+					return scheme.Value{}, fmt.Errorf("bad INI line: %q", raw)
+				}
+				ensure(cur)
+				ents := sections[cur]
+				replaced := false
+				for i, e := range ents {
+					if e.P.Car.S == k {
+						ents[i] = scheme.Cons(scheme.Str(k), scheme.Str(v))
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					sections[cur] = append(ents, scheme.Cons(scheme.Str(k), scheme.Str(v)))
+				}
+			}
+			for _, name := range order {
+				out = append(out, scheme.Cons(scheme.Str(name), scheme.List(sections[name]...)))
+			}
+			return scheme.List(out...), nil
+		},
+	})
 	return nil
 }
