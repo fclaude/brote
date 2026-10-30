@@ -29,6 +29,7 @@ const (
 	NetRequest  NetStage = "request"  // the request the script asked for, before it is sent
 	NetRedirect NetStage = "redirect" // a redirect hop, before it is followed
 	NetConnect  NetStage = "connect"  // a connection, immediately before the socket connects
+	NetListen   NetStage = "listen"   // a server serve is about to bind, before it listens
 )
 
 // NetEvent is a step the net module is about to take, given to the function
@@ -40,8 +41,9 @@ type NetEvent struct {
 	// a POST into a GET. They are empty at NetConnect.
 	Method string
 	URL    string
-	// Host, Addr and Private are set at NetConnect. Host is the name or
-	// address the URL gave, in lower case; Addr is the address and port the
+	// Host, Addr and Private are set at NetConnect, and Host alone at
+	// NetListen. Host is the name or address the URL gave, or the one serve
+	// was asked to bind, in lower case; Addr is the address and port the
 	// socket is connecting to, what Host resolved to; Private is whether Addr
 	// is one only (private #t) reaches: loopback, private, link-local,
 	// multicast, unspecified or reserved.
@@ -344,7 +346,7 @@ func installNet(s *installer) error {
 	n := &netw{scope: s.pol.Net, check: s.netCheck}
 	n.transport = n.newTransport()
 	n.client = &http.Client{Transport: n.transport, CheckRedirect: n.redirect}
-	s.closers = append(s.closers, n)
+	_ = s.closers.add(n) // the set is closed only after Install
 
 	pair := func(v scheme.Value) (string, string, error) {
 		if v.Kind != scheme.KPair {

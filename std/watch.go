@@ -172,7 +172,9 @@ func installWatch(s *installer) error {
 			w.pending = map[string]bool{} // the first poll is the baseline
 			w.mu.Unlock()
 			go w.run()
-			s.closers = append(s.closers, w)
+			if err := s.closers.add(w); err != nil {
+				return scheme.Value{}, err // add stopped it
+			}
 			s.report(FS, "watch", p, nil)
 			return scheme.ObjectValue(w), nil
 		},

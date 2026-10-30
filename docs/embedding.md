@@ -316,15 +316,16 @@ func (g *myGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value
 }
 ```
 
-The check is asked at three stages, each after the installed policy has allowed it, so it can only narrow:
+The check is asked at four stages, each after the installed policy has allowed it, so it can only narrow:
 
 | `ev.Stage` | When | Fields |
 |---|---|---|
 | `std.NetRequest` | before the request is sent | `Method`, `URL` |
 | `std.NetRedirect` | before each redirect hop is followed | `Method`, `URL` of the hop. A 301, 302 or 303 turns a POST into a GET, and the hop is judged with the method it is sent with |
 | `std.NetConnect` | immediately before each socket connects, on the dialer's hook that already guards the installed policy | `Host` (the name the URL gave), `Addr` (the address and port being connected to), `Private` |
+| `std.NetListen` | before `serve` binds a server | `Host`, the host it was asked to bind, in lower case |
 
-`(*Policy).CheckNetEvent(ev)` is `CheckNet(method, url)` for the first two and `CheckAddr(host, ip)` for the third, which refuses a loopback, private, link-local, multicast, unspecified or reserved address unless the policy says `(private #t)`. The address is the one the socket is connecting to, not one looked up earlier, so a name whose answer changes between the request and the connection is judged by the answer used. An error refuses the step; it is what the script sees and what `WithAudit` records. Returning a `*scheme.Denied`, as above, makes the refusal one `guard` cannot catch, as the Gate's is; a plain error is catchable, like the installed policy's own refusals. Headers the script set are still dropped when a redirect changes host.
+`(*Policy).CheckNetEvent(ev)` is `CheckNet(method, url)` for the first two, `CheckAddr(host, ip)` for the third, which refuses a loopback, private, link-local, multicast, unspecified or reserved address unless the policy says `(private #t)`, and `CheckListen(host)` for the fourth, which allows a loopback address or `localhost` under any net grant and any other host only from the allow list. The address is the one the socket is connecting to, not one looked up earlier, so a name whose answer changes between the request and the connection is judged by the answer used. An error refuses the step; it is what the script sees and what `WithAudit` records. Returning a `*scheme.Denied`, as above, makes the refusal one `guard` cannot catch, as the Gate's is; a plain error is catchable, like the installed policy's own refusals. Headers the script set are still dropped when a redirect changes host.
 
 While a check is installed, a request's connections serve that request alone (no keep-alive, no shared HTTP/2 connection), since a connection the check allowed for one caller must not carry another's request. The function is called from several goroutines at once, the dialer's among them, so it must be safe for that, and should honour `ctx`. A host that passes no check behaves as before.
 

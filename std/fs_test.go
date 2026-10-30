@@ -381,3 +381,27 @@ func TestWatch(t *testing.T) {
 		`(fs-watch "." 1)`: "unbound variable: fs-watch",
 	})
 }
+
+// Runtime.Close stops the watches scripts started, not only the directory
+// handles the module opened at Install.
+func TestWatchStoppedByClose(t *testing.T) {
+	dir := t.TempDir()
+	in := scheme.New()
+	rt, err := Install(in, mustParse(t, fmt.Sprintf(`(policy (fs (read %q)))`, dir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := in.EvalString(context.Background(), fmt.Sprintf(`(fs-watch %q 0.01)`, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := scheme.ObjectOf(v).(*watchObj)
+	if err := rt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-w.doneCh:
+	case <-time.After(time.Second):
+		t.Error("the watch is still polling after Runtime.Close")
+	}
+}

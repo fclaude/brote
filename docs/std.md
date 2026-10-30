@@ -269,7 +269,7 @@ A net grant also lets a script serve HTTP, not only call it:
 | `(server-stop! srv)` | stop it; void |
 | `(server? x)` | |
 
-The handler is called with an alist `((method . "GET") (path . "/") (body . "…"))` and returns a string (sent with status 200) or a list `(status body)`. A path with no route gets a 404. Request bodies and responses are capped at `max-body`, and a handler runs under the `timeout`. Each handler call runs under the context of the evaluation that called `serve`, so a gate and a per-caller policy see that caller. Binding a loopback address is allowed whenever `net` is granted; binding any other host requires the host to be in the `(allow …)` list. A server runs until `server-stop!` or the host closes the runtime, not only until the evaluation that started it ends.
+The handler is called with an alist `((method . "GET") (path . "/") (body . "…"))` and returns a string (sent with status 200) or a list `(status body)` with a status from 100 to 999. A path with no route gets a 404. Request bodies and responses are capped at `max-body`, and a handler runs under the `timeout`. Each handler call runs under the context of the evaluation that called `serve`, so a gate and a per-caller policy see that caller. Binding a loopback address is allowed whenever `net` is granted; binding any other host requires the host to be in the `(allow …)` list. A server runs until `server-stop!` or the host closes the runtime, not only until the evaluation that started it ends.
 
 Headers are an association list of names and values: `'(("authorization" . "Bearer …"))`. A status of 400 or more from `http-request` is a result you look at, not an error. These are errors: a host the policy did not name, a method it did not allow (get and head unless it says more), a redirect to such a host, a body over the limit (5 MB), a timeout (30 seconds), and a connection to a private or local address the policy did not allow.
 
@@ -313,8 +313,8 @@ What a granted command does is the command's business. Allowing `git` allows wha
 
 | Function or method | Answers |
 |---|---|
-| `std.WithNetCheck(fn)` | an `Install` option: `fn(ctx, ev)` is asked, after the installed policy, before the request is sent (`std.NetRequest`), before each redirect hop with the method it uses (`std.NetRedirect`), and immediately before each socket connects, with the address it connects to (`std.NetConnect`). `ctx` carries the evaluation's values. An error refuses the step |
-| `(*Policy).CheckNetEvent(ev)` | all a `WithNetCheck` function needs: `CheckNet` for a request or a hop, `CheckAddr` for a connection |
+| `std.WithNetCheck(fn)` | an `Install` option: `fn(ctx, ev)` is asked, after the installed policy, before the request is sent (`std.NetRequest`), before each redirect hop with the method it uses (`std.NetRedirect`), immediately before each socket connects, with the address it connects to (`std.NetConnect`), and before `serve` binds a server (`std.NetListen`). `ctx` carries the evaluation's values. An error refuses the step |
+| `(*Policy).CheckNetEvent(ev)` | all a `WithNetCheck` function needs: `CheckNet` for a request or a hop, `CheckAddr` for a connection, `CheckListen` for a bind |
 | `(*Policy).CheckNet(method, rawURL)` | whether a script holding this policy may send that request: `net` granted, the scheme, the host and port against the allow list, the method, and (for a host written as an IP address) the private-address rule |
 | `(*Policy).CheckAddr(host, ip)` | whether it may connect to `ip`, the address `host` resolved to: a loopback, private, link-local, multicast, unspecified or reserved one needs `(private #t)` |
 | `(*Policy).CheckExec(name)` | whether it may start that command (the first element of `proc-run`'s list) |

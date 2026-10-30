@@ -42,7 +42,8 @@ func WithAudit(fn func(Event)) Option { return func(s *installer) { s.audit = fn
 
 // WithNetCheck has fn judge each network step the net module is about to take,
 // after the installed policy has allowed it: the request a script asked for,
-// every redirect hop, and every connection, at the moment it is made. fn gets
+// every redirect hop, every connection, at the moment it is made, and the
+// address serve is about to bind (NetListen). fn gets
 // the request's context, which carries the values the host put in the
 // evaluation's, so a host that runs several callers on one interpreter can
 // narrow each step to the calling one's grant (Policy.CheckNetEvent). An error
@@ -67,7 +68,7 @@ type installer struct {
 	audit    func(Event)
 	netCheck func(context.Context, NetEvent) error
 	prims    []*scheme.Prim
-	closers  []io.Closer
+	closers  *closerSet
 	fs       *fsys // set by the fs module
 	module   string
 	owner    map[string]string // procedure name -> the module that installed it
@@ -89,10 +90,47 @@ func (s *installer) report(module, op, target string, err error) {
 // moduleInstallers is filled by each module's file.
 var moduleInstallers = map[string]func(*installer) error{}
 
+// closerSet is what Runtime.Close closes. The installer and the Runtime share
+// one, because procedures add to it while scripts run (a server, a watch),
+// after Install has returned.
+type closerSet struct {
+	mu     sync.Mutex
+	list   []io.Closer
+	closed bool
+}
+
+// add registers c, or closes it at once and fails when the set has already
+// been closed, so nothing started after Runtime.Close outlives it.
+func (cs *closerSet) add(c io.Closer) error {
+	cs.mu.Lock()
+	if !cs.closed {
+		cs.list = append(cs.list, c)
+		cs.mu.Unlock()
+		return nil
+	}
+	cs.mu.Unlock()
+	_ = c.Close()
+	return errors.New("the runtime has been closed")
+}
+
+// close closes everything added, newest first: what a script started (a
+// server, a watch) before the handles it uses.
+func (cs *closerSet) close() error {
+	cs.mu.Lock()
+	list := cs.list
+	cs.list, cs.closed = nil, true
+	cs.mu.Unlock()
+	var errs []error
+	for i := len(list) - 1; i >= 0; i-- {
+		errs = append(errs, list[i].Close())
+	}
+	return errors.Join(errs...)
+}
+
 // Runtime is a policy installed into an interpreter.
 type Runtime struct {
 	pol     *Policy
-	closers []io.Closer
+	closers *closerSet
 	fs      *fsys
 	owner   map[string]string
 }
@@ -103,23 +141,17 @@ func (r *Runtime) Policy() *Policy { return r.pol.Clone() }
 // Granted lists the installed modules.
 func (r *Runtime) Granted() []string { return r.pol.Granted() }
 
-// Close releases what the installed modules hold open (directory handles). Call
-// it when the interpreter is done; the procedures fail afterwards.
-func (r *Runtime) Close() error {
-	var errs []error
-	for _, c := range r.closers {
-		errs = append(errs, c.Close())
-	}
-	r.closers = nil
-	return errors.Join(errs...)
-}
+// Close releases what the installed modules hold open (directory handles) and
+// stops what scripts started (servers, watches). Call it when the interpreter
+// is done; the procedures fail afterwards.
+func (r *Runtime) Close() error { return r.closers.close() }
 
 // Install registers the procedures of every module p grants, scoped as p says,
 // plus require, modules and module-info. A module p does not grant registers
 // nothing. Call it before Freeze, once per interpreter. If it returns an error
 // the interpreter may have gained some procedures: discard it.
 func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
-	s := &installer{owner: map[string]string{}}
+	s := &installer{owner: map[string]string{}, closers: &closerSet{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -168,12 +200,7 @@ func Install(in *scheme.Interp, p *Policy, opts ...Option) (*Runtime, error) {
 	return &Runtime{pol: s.pol, closers: s.closers, fs: s.fs, owner: s.owner}, nil
 }
 
-func (s *installer) close() {
-	for _, c := range s.closers {
-		_ = c.Close()
-	}
-	s.closers = nil
-}
+func (s *installer) close() { _ = s.closers.close() }
 
 // validate rejects a policy that grants a scoped module without a scope, or an
 // unknown module, which a policy built in Go (not parsed) can contain.

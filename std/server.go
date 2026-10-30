@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fclaude/brote/scheme"
 )
@@ -21,7 +22,7 @@ type serverObj struct {
 	in     *scheme.Interp
 	ctx    context.Context
 	mu     sync.Mutex
-	ln     net.Listener
+	hs     *http.Server
 	addr   string
 	routes map[string]scheme.Value
 	closed bool
@@ -40,10 +41,9 @@ func (s *serverObj) stop() error {
 		return nil
 	}
 	s.closed = true
-	if s.ln != nil {
-		return s.ln.Close()
-	}
-	return nil
+	// Close, not just the listener: a kept-alive connection would otherwise
+	// go on answering requests after the server was stopped.
+	return s.hs.Close()
 }
 
 // handle serves one request: look up the route, cap the body, call the Scheme
@@ -83,6 +83,10 @@ func (s *serverObj) handle(w http.ResponseWriter, r *http.Request, pol *Policy, 
 			return
 		}
 		status, out = int(parts[0].I), parts[1].S
+		if status < 100 || status > 999 {
+			http.Error(w, fmt.Sprintf("the handler returned status %d, not 100 to 999", status), http.StatusInternalServerError)
+			return
+		}
 	}
 	if int64(len(out)) > pol.Net.MaxBody {
 		http.Error(w, "the response is over the host's limit", http.StatusInternalServerError)
@@ -100,37 +104,26 @@ func (s *serverObj) handle(w http.ResponseWriter, r *http.Request, pol *Policy, 
 func installServe(s *installer) error {
 	scope := s.pol.Net
 
-	// bindAllowed reports whether the net grant lets a script bind addr.
-	// Loopback exposes nothing outside the machine, so any net grant allows
-	// it; any other host must be in the allow list.
-	bindAllowed := func(addr string) error {
+	// bindAllowed reports whether the net grant lets a script bind addr:
+	// the installed policy's rule (listenAllowed), then the host's check
+	// (WithNetCheck) with the caller's context, so a caller with a narrower
+	// grant than the installed one is held to it.
+	bindAllowed := func(ctx context.Context, addr string) error {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
-			return fmt.Errorf("serve: %q is not host:port", addr)
+			return fmt.Errorf("%q is not host:port", addr)
 		}
 		host = strings.ToLower(strings.TrimSuffix(host, "."))
 		if host == "" {
-			return fmt.Errorf("serve: %q has no host", addr)
+			return fmt.Errorf("%q has no host", addr)
 		}
-		if host == "localhost" || host == "::1" || strings.HasPrefix(host, "127.") {
-			return nil
+		if !listenAllowed(scope, host) {
+			return fmt.Errorf("binding %s is not a host this host lets scripts use (allowed hosts: %s)", host, strings.Join(scope.Allow, ", "))
 		}
-		if scope.Any {
-			return nil
+		if s.netCheck != nil {
+			return s.netCheck(ctx, NetEvent{Stage: NetListen, Host: host})
 		}
-		for _, p := range scope.Allow {
-			ph, _, err := splitHostPattern(p)
-			if err != nil {
-				continue
-			}
-			if ph == host {
-				return nil
-			}
-			if suffix, ok := strings.CutPrefix(ph, "*"); ok && strings.HasSuffix(host, suffix) && host != suffix {
-				return nil
-			}
-		}
-		return fmt.Errorf("serve: binding %s is not a host this host lets scripts use (allowed hosts: %s)", host, strings.Join(scope.Allow, ", "))
+		return nil
 	}
 
 	serverArg := func(c *scheme.Call) (*serverObj, error) {
@@ -156,7 +149,7 @@ func installServe(s *installer) error {
 			if err != nil {
 				return scheme.Value{}, err
 			}
-			if err := bindAllowed(addr); err != nil {
+			if err := bindAllowed(c.Ctx, addr); err != nil {
 				s.report(Net, "serve", addr, err)
 				return scheme.Value{}, err
 			}
@@ -174,15 +167,27 @@ func installServe(s *installer) error {
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				s.report(Net, "serve", addr, err)
-				return scheme.Value{}, fmt.Errorf("serve: %w", err)
+				return scheme.Value{}, err
 			}
-			srv := &serverObj{in: c.In, ctx: c.In.DetachedContext(c.Ctx), ln: ln, addr: ln.Addr().String(), routes: routes}
-			mux := http.NewServeMux()
-			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				srv.handle(w, r, s.pol, func(op, target string, err error) { s.report(Net, op, target, err) })
-			})
-			go func() { _ = http.Serve(ln, mux) }()
-			s.closers = append(s.closers, srv)
+			srv := &serverObj{in: c.In, ctx: c.In.DetachedContext(c.Ctx), addr: ln.Addr().String(), routes: routes}
+			srv.hs = &http.Server{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					srv.handle(w, r, s.pol, func(op, target string, err error) { s.report(Net, op, target, err) })
+				}),
+				// A client cannot hold a connection open without sending: the
+				// headers and the body arrive within the timeout, the answer
+				// leaves within it plus the handler's own.
+				ReadHeaderTimeout: min(10*time.Second, s.pol.Net.Timeout),
+				ReadTimeout:       s.pol.Net.Timeout,
+				WriteTimeout:      2 * s.pol.Net.Timeout,
+				IdleTimeout:       s.pol.Net.Timeout,
+				MaxHeaderBytes:    1 << 20,
+			}
+			if err := s.closers.add(srv); err != nil {
+				_ = ln.Close()
+				return scheme.Value{}, err
+			}
+			go func() { _ = srv.hs.Serve(ln) }()
 			s.report(Net, "serve", srv.addr, nil)
 			return scheme.ObjectValue(srv), nil
 		},

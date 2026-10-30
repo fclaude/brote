@@ -15,7 +15,8 @@ import (
 // have and narrows it per call with the calling module's own Policy. The
 // network is narrowed by WithNetCheck, whose function asks CheckNetEvent at
 // every step of a request: the request, each redirect hop and each
-// connection. A Gate sees only http-request's arguments, so it cannot. The
+// connection, and at serve's bind. A Gate sees only http-request's arguments,
+// so it cannot. The
 // rest is narrowed in the Gate: ModuleOf and Has for the module, CheckExec for
 // proc-run's command. The messages are written to be shown to a person.
 //
@@ -86,8 +87,49 @@ func (p *Policy) CheckAddr(host string, ip netip.Addr) error {
 	return fmt.Errorf("net: %s resolves to %s, a private or local address, which this module may not reach", host, ip)
 }
 
+// CheckListen reports why a script holding p may not have serve bind a server
+// to host, or nil if it may. A loopback address, or localhost, exposes nothing
+// outside the machine, so any net grant allows it; any other host, a name or
+// an address, must be on the allow list.
+func (p *Policy) CheckListen(host string) error {
+	if !p.Modules[Net] {
+		return errors.New("net: this module has not been given network access")
+	}
+	if !listenAllowed(p.Net, host) {
+		return fmt.Errorf("net: %s is not a host this module may serve on%s", host, listed("hosts", p.Net.Allow))
+	}
+	return nil
+}
+
+// listenAllowed is CheckListen's rule for one net scope. Loopback is judged
+// on the address, never on how a name is spelled: 127.example.com is a name
+// like any other.
+func listenAllowed(scope NetScope, host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if host == "localhost" {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Unmap().IsLoopback() {
+		return true
+	}
+	if scope.Any {
+		return true
+	}
+	return slices.ContainsFunc(scope.Allow, func(a string) bool {
+		ph, _, err := splitHostPattern(a)
+		if err != nil {
+			return false
+		}
+		ph = strings.Trim(ph, "[]")
+		if suffix, ok := strings.CutPrefix(ph, "*"); ok {
+			return strings.HasSuffix(host, suffix) && host != strings.TrimPrefix(suffix, ".")
+		}
+		return ph == host
+	})
+}
+
 // CheckNetEvent judges ev for a script holding p: CheckNet for a request or a
-// redirect hop, CheckAddr for a connection. It is all a WithNetCheck function
+// redirect hop, CheckAddr for a connection, CheckListen for a server's bind. It is all a WithNetCheck function
 // needs for a host whose callers each have a Policy.
 func (p *Policy) CheckNetEvent(ev NetEvent) error {
 	switch ev.Stage {
@@ -95,6 +137,8 @@ func (p *Policy) CheckNetEvent(ev NetEvent) error {
 		return p.CheckNet(ev.Method, ev.URL)
 	case NetConnect:
 		return p.CheckAddr(ev.Host, ev.Addr.Addr())
+	case NetListen:
+		return p.CheckListen(ev.Host)
 	}
 	return fmt.Errorf("net: unknown stage %q", ev.Stage)
 }

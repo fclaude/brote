@@ -267,7 +267,7 @@ func installFS(s *installer) error {
 			f.roots = append(f.roots, &fsRoot{dir: d})
 		}
 	}
-	s.closers = append(s.closers, f)
+	_ = s.closers.add(f) // the set is closed only after Install
 	s.fs = f
 
 	pathP := scheme.Param{Name: "path", Type: "string", Role: "source"}
