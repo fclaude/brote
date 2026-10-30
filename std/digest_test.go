@@ -57,5 +57,12 @@ func TestSignVerify(t *testing.T) {
 	})
 	expectErr(t, `(policy (digest))`, map[string]string{
 		fmt.Sprintf(`(ecdsa-verify "%s" "hello" "ab")`, hex.EncodeToString(ecPub)): "is not granted",
+		// A scalar that is not a valid P-256 private key is refused.
+		`(ecdsa-sign "0000000000000000000000000000000000000000000000000000000000000000" "hello")`: "not a P-256 scalar",
+	})
+	// The pure profile, which digest is part of, is deterministic: the same
+	// key and message give the same signature (RFC 6979).
+	expect(t, `(policy (profile pure))`, map[string]string{
+		fmt.Sprintf(`(equal? (ecdsa-sign "%[1]s" "hello") (ecdsa-sign "%[1]s" "hello"))`, hex.EncodeToString(d)): `#t`,
 	})
 }

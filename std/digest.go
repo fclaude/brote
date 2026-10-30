@@ -1,19 +1,18 @@
 package std
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/md5"
-	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"hash"
-	"math/big"
 	"slices"
 	"strings"
 
@@ -148,7 +147,7 @@ func installDigest(s *installer) error {
 	s.add(&scheme.Prim{
 		Name: "ecdsa-sign",
 		Meta: scheme.Meta{
-			Doc: "The ECDSA P-256 signature of a message's SHA-256 under a private key, as DER hex. The key is a 32-byte scalar, as hex.",
+			Doc: "The ECDSA P-256 signature of a message's SHA-256 under a private key, as DER hex: the deterministic signature of RFC 6979, the same for the same key and message. The key is a 32-byte scalar, as hex.",
 			Params: []scheme.Param{
 				{Name: "private-key", Type: "string", Doc: "hex 32-byte scalar", Role: "credential"},
 				{Name: "message", Type: "string"},
@@ -163,11 +162,14 @@ func installDigest(s *installer) error {
 			if err != nil {
 				return scheme.Value{}, err
 			}
-			curve := elliptic.P256()
-			priv := &ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: curve}, D: new(big.Int).SetBytes(db)}
-			priv.X, priv.Y = curve.ScalarBaseMult(db)
+			priv, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), db)
+			if err != nil {
+				return scheme.Value{}, fmt.Errorf("argument 1: private key is not a P-256 scalar")
+			}
 			sum := sha256.Sum256([]byte(msg))
-			sig, err := ecdsa.SignASN1(rand.Reader, priv, sum[:])
+			// No random source: the signature is RFC 6979's deterministic one,
+			// so the module stays as deterministic as the pure profile says.
+			sig, err := priv.Sign(nil, sum[:], crypto.SHA256)
 			if err != nil {
 				return scheme.Value{}, err
 			}
