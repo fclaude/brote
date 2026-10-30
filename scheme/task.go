@@ -19,6 +19,9 @@ type task struct {
 	// Tail calls loop inside one eval and do not add to it; limit bounds it.
 	depth int
 	limit int
+	// steps counts the iterations of the eval loop in this task, when the
+	// interpreter has a step budget (WithMaxSteps).
+	steps int64
 	// out is where display, write and newline go while with-output-to-string
 	// is capturing; nil means the interpreter's writer.
 	out io.Writer

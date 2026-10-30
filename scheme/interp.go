@@ -68,6 +68,11 @@ type Interp struct {
 	quiesce sync.Mutex
 	running int
 
+	// maxSteps bounds how many steps one evaluation may take when the host
+	// set a budget (WithMaxSteps); 0 means no budget, and context.Context
+	// alone stops an evaluation.
+	maxSteps int64
+
 	// tasks is non-nil when the host gave scripts tasks (WithTasks).
 	tasks *taskRuntime
 	// taskFailed hears of detached tasks that failed unobserved (WithTaskFailed).
@@ -136,6 +141,23 @@ func WithOutput(w io.Writer) Option { return func(in *Interp) { in.out = w } }
 // (the repository root in a session). Default: the process working dir.
 func WithBaseDir(dir string) Option { return func(in *Interp) { in.baseDir = dir } }
 
+// WithMaxSteps bounds how many evaluation steps one evaluation may take: each
+// iteration of the eval loop, a special form or an application, counts one.
+// Past the budget the evaluation fails with an error in the MaxDepth style
+// ("step budget exhausted: …"), so an infinite loop in untrusted code cannot
+// run forever even with a context that never ends. The budget fires only when
+// it is spent, so no steps are left to handle the error with — like a
+// cancelled context, guard cannot catch it in practice. n <= 0 means no
+// budget. The budget is per evaluation (per task), not for the whole
+// interpreter, and does not count the prelude the interpreter itself loads.
+func WithMaxSteps(n int64) Option {
+	return func(in *Interp) {
+		if n > 0 {
+			in.maxSteps = n
+		}
+	}
+}
+
 // New creates an interpreter with the builtins and the prelude loaded.
 func New(opts ...Option) *Interp {
 	in := &Interp{
@@ -157,8 +179,14 @@ func New(opts ...Option) *Interp {
 	}
 	in.out = &syncWriter{w: in.out}
 	in.registerBuiltins()
-	if err := in.loadPrelude(); err != nil {
-		panic("scheme: prelude: " + err.Error())
+	// The prelude is the interpreter's own code, not the script's, so the step
+	// budget does not count it.
+	budget := in.maxSteps
+	in.maxSteps = 0
+	preludeErr := in.loadPrelude()
+	in.maxSteps = budget
+	if preludeErr != nil {
+		panic("scheme: prelude: " + preludeErr.Error())
 	}
 	return in
 }
@@ -377,6 +405,12 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 		}
 	}()
 	for {
+		if in.maxSteps > 0 {
+			t.steps++
+			if t.steps > in.maxSteps {
+				return Value{}, errorf("eval", "step budget exhausted: more than %d evaluation steps", in.maxSteps)
+			}
+		}
 		switch x.Kind {
 		case KSymbol:
 			v, ok := env.Lookup(x.S)
