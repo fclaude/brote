@@ -68,3 +68,23 @@
   (define g (case-lambda ((x . rest) (cons x rest)) (() 'none)))
   (assert-equal '(1 2 3) (g 1 2 3))
   (assert-equal 'none (g)))
+
+(test "define-record-type makes a tagged vector with named accessors"
+  (define-record-type point (make-point x y) point?
+    (x point-x point-x-set!)
+    (y point-y point-y-set!))
+  (define-record-type line (make-line a b) line?
+    (a line-a line-a-set!)
+    (b line-b line-b-set!))
+  (define p (make-point 1 2))
+  (assert (point? p))
+  (assert (not (point? #(1 2))))
+  (assert (not (point? (make-line 1 2))))
+  (assert (not (line? p)))
+  (assert-equal 1 (point-x p))
+  (assert-equal 2 (point-y p))
+  (point-x-set! p 10)
+  (assert-equal 10 (point-x p))
+  (assert-equal 2 (point-y p))
+  (assert-error (point-x #(0 1 2)) "not a")
+  (assert-error (point-x-set! (make-line 1 2) 5) "not a"))

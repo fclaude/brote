@@ -636,6 +636,7 @@ environment before anything else. It defines, in Scheme:
 | `(vector-map f v)` `(vector-for-each f v)` | `map` and `for-each` over one vector (`vector-map` makes a new vector) |
 | `(let-values ((formals expr) …) body …)` | each `expr` is evaluated once and must return a list with one element per name in `formals`; the names are bound in `body` |
 | `(case-lambda (formals body …) …)` | a procedure that runs the first clause whose `formals` fit the arguments it was called with; an error when none does |
+| `(define-record-type type (ctor field …) pred (field acc mut) …)` | a record type over vectors: `ctor` builds an instance (a vector tagged with a fresh `gensym`), `pred` is true only for its instances, and `acc`/`mut` read and set one field, erroring on a value that is not one. The names are written in the form, since syntax-rules cannot join two names into one |
 | `(delay expr)` | a promise for `expr`, evaluated on the first `force` (needs the task grant, like the rest of §5's Tasks procedures) |
 | `(string-empty? s)` | |
 | `(test name body …)` `(assert expr)` `(assert-equal expected expr)` `(assert-error expr [text])` `(test-results)` `(run-test name thunk)` | testing, written in Scheme; see [stdlib.md](stdlib.md#tests). The first four are macros |
