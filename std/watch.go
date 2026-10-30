@@ -180,7 +180,7 @@ func installWatch(s *installer) error {
 	s.add(&scheme.Prim{
 		Name: "fs-watch-changes",
 		Meta: scheme.Meta{
-			Doc: "The names in a watched directory that appeared, changed or were removed since the last call, sorted, as a list of strings; drains the queue.",
+			Doc:    "The names in a watched directory that appeared, changed or were removed since the last call, sorted, as a list of strings; drains the queue.",
 			Params: []scheme.Param{watchP},
 		},
 		Handler: func(c *scheme.Call) (scheme.Value, error) {

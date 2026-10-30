@@ -209,7 +209,7 @@ func installEncoding(s *installer) error {
 	s.add(&scheme.Prim{
 		Name: "ini-parse",
 		Meta: scheme.Meta{
-			Doc: "Parse INI text into a list of (section entries...) pairs in order of first appearance: [section] headers, key=value lines, ; or # comment lines, and a valueless key whose value is \"\". Keys before any header are in the \"\" section. Whitespace around names and values is stripped and a duplicate key keeps its last value.",
+			Doc:    "Parse INI text into a list of (section entries...) pairs in order of first appearance: [section] headers, key=value lines, ; or # comment lines, and a valueless key whose value is \"\". Keys before any header are in the \"\" section. Whitespace around names and values is stripped and a duplicate key keeps its last value.",
 			Params: text,
 		},
 		Handler: func(c *scheme.Call) (scheme.Value, error) {
