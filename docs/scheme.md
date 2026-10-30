@@ -493,7 +493,7 @@ Promises delay a value until something needs it:
 |---|---|
 | `(delay expr)` | a promise: `expr` is not evaluated yet (a macro, since only a macro can capture its expression unevaluated) |
 | `(make-promise thunk)` | a promise that will run `thunk` (a procedure of no arguments) on the first `force` |
-| `(force p)` | run the promise's body if no task has yet — the body runs exactly once — and return its value, the same for every caller; a chain of promises is unwrapped. A value that is not a promise is returned as it is |
+| `(force p)` | run the promise's body if no task has yet — the body runs exactly once, unless it forces its own promise, when the first run to finish sets the value — and return its value, the same for every caller; a chain of promises is unwrapped. A value that is not a promise is returned as it is |
 | `(promise? x)` | |
 
 ```lisp
@@ -634,9 +634,9 @@ environment before anything else. It defines, in Scheme:
 | `(string-index s sub)` | the rune index of the first occurrence of `sub` in `s`, or `#f` |
 | `(string-pad-left s n [pad])` `(string-pad-right s n [pad])` | add `pad` (default `" "`) at the left or right until `s` is at least `n` runes long; never cuts |
 | `(vector-map f v)` `(vector-for-each f v)` | `map` and `for-each` over one vector (`vector-map` makes a new vector) |
-| `(let-values ((formals expr) …) body …)` | each `expr` is evaluated once and must return a list with one element per name in `formals`; the names are bound in `body` |
+| `(let-values ((formals expr) …) body …)` | each `expr` is evaluated once, in the scope around the form and before any name is bound, and must return a list with one element per name in `formals`; the names are bound in `body` |
 | `(case-lambda (formals body …) …)` | a procedure that runs the first clause whose `formals` fit the arguments it was called with; an error when none does |
-| `(define-record-type type (ctor field …) pred (field acc mut) …)` | a record type over vectors: `ctor` builds an instance (a vector tagged with a fresh `gensym`), `pred` is true only for its instances, and `acc`/`mut` read and set one field, erroring on a value that is not one. The names are written in the form, since syntax-rules cannot join two names into one |
+| `(define-record-type type (ctor field …) pred (field acc [mut]) …)` | a record type over vectors: `ctor` builds an instance (a vector tagged with a value made once for this form), `pred` is true only for its instances — not for another type, even one with the same name — and `acc`/`mut` read and set one field, erroring on a value that is not one. A field may leave out its mutator. The names are written in the form, since syntax-rules cannot join two names into one |
 | `(delay expr)` | a promise for `expr`, evaluated on the first `force` (needs the task grant, like the rest of §5's Tasks procedures) |
 | `(string-empty? s)` | |
 | `(test name body …)` `(assert expr)` `(assert-equal expected expr)` `(assert-error expr [text])` `(test-results)` `(run-test name thunk)` | testing, written in Scheme; see [stdlib.md](stdlib.md#tests). The first four are macros |

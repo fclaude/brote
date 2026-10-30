@@ -57,7 +57,10 @@
 (test "let-values binds each producer's list of values"
   (assert-equal 6 (let-values (((a b) (list 1 2)) ((c) (list 3))) (+ a b c)))
   (assert-equal '(1 2 3) (let-values (((x y z) (list 1 2 3))) (list x y z)))
-  (assert-equal '(1 2 3) (let-values (((x . rest) (list 1 2 3))) (cons x rest))))
+  (assert-equal '(1 2 3) (let-values (((x . rest) (list 1 2 3))) (cons x rest)))
+  ;; Every producer is evaluated before any name is bound, in the outer scope.
+  (assert-equal '(10 1) (let ((x 1)) (let-values (((x) (list 10)) ((y) (list x))) (list x y))))
+  (assert-equal 5 (let-values () 5)))
 
 (test "case-lambda picks the clause whose formals fit"
   (define f (case-lambda ((x) (* x 10)) ((x y) (+ x y))))
@@ -88,3 +91,13 @@
   (assert-equal 2 (point-y p))
   (assert-error (point-x #(0 1 2)) "not a")
   (assert-error (point-x-set! (make-line 1 2) 5) "not a"))
+
+(test "define-record-type types are distinct even with the same name"
+  (define-record-type cell (make-cell v) cell? (v cell-v))
+  (define old (make-cell 1))
+  (assert-equal 1 (cell-v old))
+  ;; A second type named cell, with other fields: the old instance is not one.
+  (define-record-type cell (make-cell a b) cell? (a cell-a cell-a-set!) (b cell-b))
+  (assert (not (cell? old)))
+  (assert (cell? (make-cell 1 2)))
+  (assert-error (cell-a old) "not a"))

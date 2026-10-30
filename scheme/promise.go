@@ -44,10 +44,34 @@ func (in *Interp) registerPromises() {
 				return v, nil
 			}
 			var err error
-			v, err = c.In.onceDo(c, p.once, p.thunk)
-			if err != nil {
+			if v, err = forceAgain(c, p); err != nil {
 				return Value{}, err
 			}
 		}
 	})
+}
+
+// forceAgain runs p's body for force. A force from inside the body, by the
+// task already running it, runs the body again rather than waiting for
+// itself; the first run to finish sets the value, and the others return it,
+// as R7RS has it.
+func forceAgain(c *Call, p *promiseObj) (Value, error) {
+	rt := p.rt
+	rt.mu.Lock()
+	reentrant := p.once.state == 1 && p.once.owner == c.t
+	rt.mu.Unlock()
+	if !reentrant {
+		return c.In.onceDo(c, p.once, p.thunk)
+	}
+	v, err := c.In.apply(c.t, c.Ctx, p.thunk, nil)
+	if err != nil {
+		return Value{}, err
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if p.once.state == 2 {
+		return p.once.val, nil
+	}
+	p.once.state, p.once.val = 2, v
+	return v, nil
 }

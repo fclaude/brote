@@ -104,6 +104,7 @@ type onceObj struct {
 	id      int64
 	state   int // under rt.mu: 0 not started, 1 running, 2 done
 	val     Value
+	owner   *task // under rt.mu: the task running thunk, while state is 1
 	waiters []*waiter
 }
 
@@ -123,13 +124,22 @@ func (in *Interp) onceDo(c *Call, o *onceObj, thunk Value) (Value, error) {
 			rt.mu.Unlock()
 			return v, nil
 		case 0:
-			o.state = 1
+			o.state, o.owner = 1, c.t
 			rt.mu.Unlock()
 			v, err := in.apply(c.t, c.Ctx, thunk, nil)
 			rt.mu.Lock()
-			if err == nil {
+			o.owner = nil
+			switch {
+			case o.state == 2:
+				// A reentrant force (promise.go) finished first: its value
+				// stands, as R7RS has it, though this run's error is still
+				// this caller's.
+				if err == nil {
+					v = o.val
+				}
+			case err == nil:
 				o.state, o.val = 2, v
-			} else {
+			default:
 				o.state = 0
 			}
 			for _, w := range o.waiters {

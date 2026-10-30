@@ -52,4 +52,16 @@ func TestDelayForce(t *testing.T) {
 (atom-ref c2)`)); got != "1" {
 		t.Errorf("eight concurrent forces left counter = %s, want 1", got)
 	}
+
+	// A body may force its own promise (R7RS's reentrancy example): the
+	// first run to finish sets the value, and later forces return it.
+	if got := Write(eval(t, in, `
+(define count 0)
+(define x 5)
+(define p3 (delay (begin (set! count (+ count 1)) (if (> count x) count (force p3)))))
+(define first (force p3))
+(set! x 10)
+(list first (force p3))`)); got != "(6 6)" {
+		t.Errorf("reentrant force => %s, want (6 6)", got)
+	}
 }

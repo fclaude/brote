@@ -11,14 +11,29 @@
 
 ;; Each producer's value must be a list with one element per name in its
 ;; formals: the eval loop returns one value per expression, so a producer
-;; that yields several packs them into a list.
+;; that yields several packs them into a list. Every expr is evaluated before
+;; any name is bound, in the scope around the form, as R7RS has it:
+;; %let-values evaluates each into a temporary (a let binder, so each
+;; expansion's is fresh), then %let-values-bind binds the formals.
 (define-syntax let-values
   (syntax-rules ()
-    ((let-values () body ...)
-     (begin body ...))
-    ((let-values ((formals expr) binding ...) body ...)
+    ((let-values (binding ...) body ...)
+     (%let-values (binding ...) () body ...))))
+
+(define-syntax %let-values
+  (syntax-rules ()
+    ((%let-values () (bound ...) body ...)
+     (%let-values-bind (bound ...) body ...))
+    ((%let-values ((formals expr) binding ...) (bound ...) body ...)
      (let ((tmp expr))
-       (apply (lambda formals (let-values (binding ...) body ...)) tmp)))))
+       (%let-values (binding ...) (bound ... (formals tmp)) body ...)))))
+
+(define-syntax %let-values-bind
+  (syntax-rules ()
+    ((%let-values-bind () body ...)
+     (let () body ...))
+    ((%let-values-bind ((formals tmp) bound ...) body ...)
+     (apply (lambda formals (%let-values-bind (bound ...) body ...)) tmp))))
 
 (define-syntax case-lambda
   (syntax-rules ()
@@ -30,23 +45,15 @@
            ...
            (else (error "case-lambda: no clause matches" args))))))))
 
-;; Records are vectors: #(tag field-names value …), where the tag is a fresh
-;; gensym kept in a registry keyed by the type name, so the predicate is true
-;; only for instances of this one type. The names of the constructor,
-;; predicate, accessors and mutators are written in the form: syntax-rules
-;; cannot join a type name and a field name into one.
-
-(define %record-tags (make-hash))
-
-(define %record-tag
-  (lambda (type)
-    "The unique tag of a record type: a gensym, made on first use and kept."
-    (let ((t (hash-ref %record-tags type #f)))
-      (if t
-          t
-          (let ((n (gensym (symbol->string type))))
-            (hash-set! %record-tags type n)
-            (hash-ref %record-tags type n))))))
+;; Records are vectors: #(tag field-names value …). The tag is a pair made
+;; once for each define-record-type form, held in a let around the
+;; procedures, so the predicate is true only for instances made by that form's
+;; constructor — not for another type that has the same name, and not for one
+;; a later form of the same name defines. The procedures are defined first
+;; and set inside that let, since a define inside it would be local. The
+;; names of the constructor, predicate, accessors and mutators are written in
+;; the form: syntax-rules cannot join a type name and a field name into one.
+;; A field spec is (field accessor) or (field accessor mutator).
 
 (define %record-index
   (lambda (fields f)
@@ -58,21 +65,36 @@
 
 (define-syntax define-record-type
   (syntax-rules ()
-    ((define-record-type type (ctor field ...) pred (fname acc mut) ...)
+    ((define-record-type type (ctor field ...) pred spec ...)
      (begin
-       (define (ctor field ...) (vector (%record-tag 'type) (quote (field ...)) field ...))
-       (define (pred v)
-         (and (vector? v)
-              (>= (vector-length v) 2)
-              (eq? (vector-ref v 0) (%record-tag 'type))
-              (= (vector-length v) (+ 2 (length (vector-ref v 1))))))
-       (define (acc r)
-         (if (pred r)
-             (vector-ref r (+ 2 (%record-index (vector-ref r 1) 'fname)))
-             (error (string-append "not a " (symbol->string 'type) " record") r)))
-       ...
-       (define (mut r v)
-         (if (pred r)
-             (begin (vector-set! r (+ 2 (%record-index (vector-ref r 1) 'fname)) v) (void))
-             (error (string-append "not a " (symbol->string 'type) " record") r)))
-       ...))))
+       (define ctor #f)
+       (define pred #f)
+       (%record-define spec) ...
+       (let ((tag (list 'type)))
+         (set! ctor (lambda (field ...) (vector tag (quote (field ...)) field ...)))
+         (set! pred (lambda (v)
+                      (and (vector? v)
+                           (>= (vector-length v) 2)
+                           (eq? (vector-ref v 0) tag))))
+         (%record-set type pred spec) ...
+         (void))))))
+
+(define-syntax %record-define
+  (syntax-rules ()
+    ((%record-define (fname acc)) (define acc #f))
+    ((%record-define (fname acc mut)) (begin (define acc #f) (define mut #f)))))
+
+(define-syntax %record-set
+  (syntax-rules ()
+    ((%record-set type pred (fname acc))
+     (set! acc (lambda (r)
+                 (if (pred r)
+                     (vector-ref r (+ 2 (%record-index (vector-ref r 1) 'fname)))
+                     (error (string-append "not a " (symbol->string 'type) " record") r)))))
+    ((%record-set type pred (fname acc mut))
+     (begin
+       (%record-set type pred (fname acc))
+       (set! mut (lambda (r v)
+                   (if (pred r)
+                       (begin (vector-set! r (+ 2 (%record-index (vector-ref r 1) 'fname)) v) (void))
+                       (error (string-append "not a " (symbol->string 'type) " record") r))))))))
