@@ -9,6 +9,7 @@ import (
 
 	"github.com/fclaude/brote/repl"
 	"github.com/fclaude/brote/scheme"
+	"github.com/fclaude/brote/std"
 )
 
 func run(t *testing.T, input string, o repl.Options) string {
@@ -99,6 +100,21 @@ func TestCommandsAreOffByDefault(t *testing.T) {
 	got := run(t, ",help\n", repl.Options{})
 	if !strings.HasPrefix(got, "error: ") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// ,policy prints what the host's -print-policy prints for the same policy:
+// the same rendering, std.Policy.Pretty, not a copy of it.
+func TestPolicyCommand(t *testing.T) {
+	pol := std.Allow(std.Profile("safe"), std.NetHosts("api.example.com"))
+	want := pol.Pretty() + "\n"
+	got := run(t, ",policy\n", repl.Options{Commands: true, Policy: func() string { return pol.Pretty() }})
+	if got != want {
+		t.Fatalf(":policy printed %q, want %q", got, want)
+	}
+	// Without a Policy option there is no ,policy.
+	if got := run(t, ",policy\n", repl.Options{Commands: true}); got != "this session has no policy to show\n" {
+		t.Fatalf(":policy without a host policy: %q", got)
 	}
 }
 

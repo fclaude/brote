@@ -18,6 +18,7 @@ var commandHelp = []struct{ name, args, text string }{
 	{",doc", "NAME", "how NAME is called, and what it does"},
 	{",apropos", "TEXT", "the procedures and special forms with TEXT in their name"},
 	{",defs", "", "the names this session has defined"},
+	{",policy", "", "what this session's scripts are granted (like -print-policy)"},
 	{",load", "FILE", "evaluate the forms in FILE"},
 	{",time", "EXPR", "evaluate EXPR and say how long it took"},
 	{",quit", "", "leave (Ctrl-D does too)"},
@@ -89,6 +90,12 @@ func (c *commands) run(line string) (quit bool) {
 		} else {
 			fmt.Fprintln(c.w, strings.Join(names, " "))
 		}
+	case ",policy":
+		if c.o.Policy == nil {
+			fmt.Fprintln(c.w, "this session has no policy to show")
+			break
+		}
+		fmt.Fprintln(c.w, c.o.Policy())
 	case ",load":
 		if arg == "" {
 			fmt.Fprintln(c.w, "usage: ,load FILE")

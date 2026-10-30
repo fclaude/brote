@@ -190,6 +190,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	default:
 		o := repl.Options{}
+		o.Policy = func() string { return pol.Pretty() } // what ,policy shows, same as -print-policy
 		if isTerminal(stdin) {
 			o.Prompt, o.Continue = "brote> ", "...    "
 			o.Commands, o.Tracker = true, tracker

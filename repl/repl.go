@@ -38,6 +38,11 @@ type Options struct {
 	// through. The loop uses it to start the prompt on a new line when a
 	// form printed text without ending it.
 	Tracker *Tracker
+
+	// Policy, when set, is what the ,policy command prints: the grant this
+	// session's scripts run under, rendered the way the host renders it for
+	// its own -print-policy (std.Policy.Pretty). Empty means no ,policy.
+	Policy func() string
 }
 
 // Tracker passes output on and remembers whether it ended a line.

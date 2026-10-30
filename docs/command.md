@@ -30,6 +30,7 @@ A line that starts with a comma is a command for the REPL, not Scheme:
 | `,doc NAME` | how `NAME` is called and what it does. For a procedure you wrote, it is the string before its body: `(define (double x) "Twice x." (* 2 x))` |
 | `,apropos TEXT` | the procedures and special forms with `TEXT` in their name |
 | `,defs` | the names this session has defined |
+| `,policy` | what this session's scripts are granted, printed the same way as `-print-policy` |
 | `,load FILE` | evaluate the forms in `FILE` |
 | `,time EXPR` | evaluate `EXPR` and say how long it took |
 | `,quit` | leave |
