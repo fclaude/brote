@@ -13,8 +13,9 @@ const fmtUsage = `usage: brote fmt [-w] [FILE...]
 
 Format Scheme source the way the reader reads it: each line moves to the
 column of the parenthesis it sits in, two spaces deeper than its head, and
-nothing else changes — comments, strings and token positions are kept, so
-formatting twice gives the same bytes.
+trailing whitespace outside strings is dropped. Nothing else changes —
+comments, strings and the order of tokens are kept, so the source reads the
+same and formatting twice gives the same bytes.
 
   FILE...   format each file, to standard output
   -w        rewrite each FILE in place

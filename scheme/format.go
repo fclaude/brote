@@ -6,26 +6,29 @@ import "strings"
 // column of the innermost parenthesis still open at the line's start, plus two
 // spaces — or, for a line that begins with a close parenthesis, that
 // parenthesis's own column. Comments, strings, raw strings and block comments
-// are copied as they are, and only leading whitespace ever changes, so
-// formatting twice gives the same bytes. It accepts exactly what Read accepts.
+// are copied as they are. Besides leading whitespace, only trailing whitespace
+// outside a string or block comment is dropped; a line that ends inside one
+// keeps it, since it is part of the string. Columns are measured on the
+// re-indented lines, so formatting twice gives the same bytes. It accepts
+// exactly what Read accepts.
 func Format(src string) (string, error) {
 	if _, err := Read(src); err != nil {
 		return "", err
 	}
 	var b strings.Builder
-	var open []int // columns of the '(' still open
+	var open []int // columns of the '(' still open, in the formatted text
 	inString, inRaw := false, false
 	inBlock := 0
 	lines := strings.Split(src, "\n")
 	for li, line := range lines {
-		body := strings.TrimRight(line, " \t\r")
+		var out string
 		switch {
 		case inString || inRaw || inBlock > 0:
-			b.WriteString(body) // inside a string or block comment: verbatim
-		case strings.TrimSpace(body) == "":
+			out = line // inside a string or block comment: verbatim
+		case strings.TrimSpace(line) == "":
 			// a blank line stays blank
 		default:
-			trimmed := strings.TrimLeft(body, " \t")
+			trimmed := strings.TrimLeft(line, " \t")
 			col := 0
 			if len(open) > 0 {
 				col = open[len(open)-1]
@@ -33,13 +36,16 @@ func Format(src string) (string, error) {
 					col += 2
 				}
 			}
-			b.WriteString(strings.Repeat(" ", col))
-			b.WriteString(trimmed)
+			out = strings.Repeat(" ", col) + trimmed
 		}
+		open, inString, inRaw, inBlock = scanLine(out, open, inString, inRaw, inBlock)
+		if !inString && !inRaw && inBlock == 0 {
+			out = strings.TrimRight(out, " \t\r")
+		}
+		b.WriteString(out)
 		if li < len(lines)-1 {
 			b.WriteByte('\n')
 		}
-		open, inString, inRaw, inBlock = scanLine(line, open, inString, inRaw, inBlock)
 	}
 	return b.String(), nil
 }

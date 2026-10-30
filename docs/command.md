@@ -155,7 +155,7 @@ The status is 0 if every test passed, 1 if any failed (or a file could not run t
 
 ## Formatting
 
-`brote fmt` re-indents Scheme source: each line moves to the column of the parenthesis it sits in, two spaces deeper than its head, and nothing else changes — comments, strings and where each token sits are kept, so formatting twice gives the same bytes. Input the reader rejects is an error. With no FILE it reads standard input and writes standard output; with `-w` it rewrites each FILE in place.
+`brote fmt` re-indents Scheme source: each line moves to the column of the parenthesis it sits in, two spaces deeper than its head, and trailing whitespace outside strings is dropped. Nothing else changes — comments, strings (including whitespace at the end of a line inside one) and the order of tokens are kept, so the source reads the same and formatting twice gives the same bytes. Input the reader rejects is an error. With no FILE it reads standard input and writes standard output; with `-w` it rewrites each FILE in place.
 
 <!-- run-shell -->
 ```console
