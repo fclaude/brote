@@ -53,3 +53,18 @@
 (test "doc describes a procedure written in Scheme"
   (define (double x) "Twice x." (* 2 x))
   (assert-equal "(double x)\nTwice x." (doc double)))
+
+(test "let-values binds each producer's list of values"
+  (assert-equal 6 (let-values (((a b) (list 1 2)) ((c) (list 3))) (+ a b c)))
+  (assert-equal '(1 2 3) (let-values (((x y z) (list 1 2 3))) (list x y z)))
+  (assert-equal '(1 2 3) (let-values (((x . rest) (list 1 2 3))) (cons x rest))))
+
+(test "case-lambda picks the clause whose formals fit"
+  (define f (case-lambda ((x) (* x 10)) ((x y) (+ x y))))
+  (assert-equal 50 (f 5))
+  (assert-equal 12 (f 5 7))
+  (assert-error (f) "no clause")
+  (assert-error (f 1 2 3) "no clause")
+  (define g (case-lambda ((x . rest) (cons x rest)) (() 'none)))
+  (assert-equal '(1 2 3) (g 1 2 3))
+  (assert-equal 'none (g)))
