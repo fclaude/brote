@@ -26,6 +26,7 @@ import (
 
 const usage = `usage: brote [OPTION...] [-e EXPR | FILE...] [-- ARG...]
        brote [OPTION...] test [-v] [PATH...]
+       brote fmt [-w] [FILE...]
        brote -version
 
 With no arguments brote reads Scheme from standard input and evaluates it,
@@ -76,6 +77,10 @@ func main() {
 // run is main with its streams made explicit, so a test can drive it.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	args, scriptArgs := splitScriptArgs(args)
+	if i := fmtWord(args); i >= 0 {
+		args = append(append([]string(nil), args[:i]...), args[i+1:]...)
+		return runFmt(args, stdin, stdout, stderr)
+	}
 	testMode := false
 	if i := testWord(args); i >= 0 {
 		testMode = true

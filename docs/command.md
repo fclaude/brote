@@ -8,6 +8,7 @@ brote FILE...         run files, in order, in one interpreter
 brote -e EXPR         evaluate an expression and print its value
 brote FILE -- ARG...  everything after -- is for the script
 brote test [PATH...]  run files of tests and report what failed
+brote fmt [-w] FILE...  format Scheme source; -w rewrites the files
 brote -sandbox FILE   run with no access to files, network or programs
 brote -allow SPEC ... run with only what SPEC names
 brote -version
@@ -150,6 +151,19 @@ FAIL  math_test.scm  (2 tests)
 Every file runs in an interpreter of its own, so one file cannot see what another defined, and a test that changes global state cannot break the ones in other files. What a file prints is shown only when something in it failed. `-v` lists the tests that passed too. A failing test shows the position of the failed assertion, then the procedures it was in, as an [uncaught error](#when-a-script-fails) does. An error outside any test, such as a file that does not read or a failure at the top of the file, is reported as `error outside a test`; the tests that ran before it still count.
 
 The status is 0 if every test passed, 1 if any failed (or a file could not run to the end, or there was nothing to run), and 2 for a path that cannot be read. The [options that limit a script](#what-a-script-can-reach) apply to the tests: `brote -sandbox test` runs them with no access to files, network or programs. To run a script called `test`, write `./test`.
+
+## Formatting
+
+`brote fmt` re-indents Scheme source: each line moves to the column of the parenthesis it sits in, two spaces deeper than its head, and nothing else changes — comments, strings and where each token sits are kept, so formatting twice gives the same bytes. Input the reader rejects is an error. With no FILE it reads standard input and writes standard output; with `-w` it rewrites each FILE in place.
+
+<!-- run-shell -->
+```console
+$ printf '(define (f x)\n(+ x 1))\n' > f.scm
+$ brote fmt f.scm
+(define (f x)
+  (+ x 1))
+$ brote fmt -w f.scm
+```
 
 ## What a script can reach
 

@@ -11,8 +11,10 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/fclaude/brote/analysis"
+	"github.com/fclaude/brote/scheme"
 )
 
 const MaxMessage = 4 << 20
@@ -25,6 +27,7 @@ type message struct {
 type document struct {
 	uri      string
 	version  int
+	text     string
 	analysis *analysis.Document
 }
 type Server struct {
@@ -158,7 +161,7 @@ func (s *Server) handle(m message) (any, int, error) {
 		}
 		s.profile = p.Options.HostProfile
 		s.initialized = true
-		return map[string]any{"serverInfo": map[string]any{"name": "brote-lsp"}, "capabilities": map[string]any{"positionEncoding": "utf-16", "textDocumentSync": map[string]any{"openClose": true, "change": 1}, "documentSymbolProvider": true, "definitionProvider": true, "referencesProvider": true, "workspaceSymbolProvider": true, "hoverProvider": true, "completionProvider": map[string]any{}}}, 0, nil
+		return map[string]any{"serverInfo": map[string]any{"name": "brote-lsp"}, "capabilities": map[string]any{"positionEncoding": "utf-16", "textDocumentSync": map[string]any{"openClose": true, "change": 1}, "documentSymbolProvider": true, "definitionProvider": true, "referencesProvider": true, "workspaceSymbolProvider": true, "hoverProvider": true, "documentFormattingProvider": true, "completionProvider": map[string]any{}}}, 0, nil
 	}
 	if !s.initialized {
 		return nil, -32002, errors.New("server not initialized")
@@ -184,7 +187,7 @@ func (s *Server) handle(m message) (any, int, error) {
 		if t.URI == "" {
 			return invalid(errors.New("missing document URI"))
 		}
-		d := &document{t.URI, t.Version, analysis.Analyze(t.Text, s.profile)}
+		d := &document{uri: t.URI, version: t.Version, text: t.Text, analysis: analysis.Analyze(t.Text, s.profile)}
 		s.documents[t.URI] = d
 		return nil, 0, s.publish(d)
 	case "textDocument/didChange":
@@ -214,7 +217,8 @@ func (s *Server) handle(m message) (any, int, error) {
 			}
 		}
 		d.version = p.TextDocument.Version
-		d.analysis = analysis.Analyze(p.Changes[len(p.Changes)-1].Text, s.profile)
+		d.text = p.Changes[len(p.Changes)-1].Text
+		d.analysis = analysis.Analyze(d.text, s.profile)
 		return nil, 0, s.publish(d)
 	case "textDocument/didClose":
 		var p struct {
@@ -258,7 +262,7 @@ func (s *Server) handle(m message) (any, int, error) {
 	}
 	d := s.documents[p.TextDocument.URI]
 	switch m.Method {
-	case "textDocument/documentSymbol", "textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/completion":
+	case "textDocument/documentSymbol", "textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/completion", "textDocument/formatting":
 		if d == nil {
 			return invalid(errors.New("document is not open"))
 		}
@@ -266,6 +270,18 @@ func (s *Server) handle(m message) (any, int, error) {
 		return nil, -32601, fmt.Errorf("method not found: %s", m.Method)
 	}
 	switch m.Method {
+	case "textDocument/formatting":
+		out, err := scheme.Format(d.text)
+		if err != nil {
+			return invalid(err)
+		}
+		if out == d.text {
+			return []any{}, 0, nil
+		}
+		lines := strings.Split(d.text, "\n")
+		end := map[string]any{"line": len(lines) - 1, "character": utf16Len(lines[len(lines)-1])}
+		rng := map[string]any{"start": map[string]any{"line": 0, "character": 0}, "end": end}
+		return []any{map[string]any{"range": rng, "newText": out}}, 0, nil
 	case "textDocument/documentSymbol":
 		out := []any{}
 		for _, def := range d.analysis.Definitions {
@@ -305,3 +321,6 @@ func symbolKind(d *analysis.Definition) int {
 	}
 	return 13
 }
+
+// utf16Len is the length of s in UTF-16 code units, what LSP positions count.
+func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }

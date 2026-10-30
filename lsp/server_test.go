@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/fclaude/brote/scheme"
 )
 
 func TestSession(t *testing.T) {
@@ -74,5 +76,62 @@ func TestFramingBounds(t *testing.T) {
 		if _, err := readFrame(bufio.NewReader(strings.NewReader(frame))); err == nil {
 			t.Fatal(frame)
 		}
+	}
+}
+
+func TestFormatting(t *testing.T) {
+	bad := "(define (f x)\n(+ x 1))\n"
+	text, _ := json.Marshal(bad)
+	messages := []string{
+		`{"id":1,"method":"initialize","params":{"initializationOptions":{"hostProfile":{"name":"t","symbols":[]}}}}`,
+		`{"method":"initialized"}`,
+		fmt.Sprintf(`{"method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///a.scm","version":1,"text":%s}}}`, text),
+		`{"id":2,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file:///a.scm"}}}`,
+		`{"id":3,"method":"shutdown"}`, `{"method":"exit"}`,
+	}
+	var in, out bytes.Buffer
+	for _, m := range messages {
+		fmt.Fprintf(&in, "Content-Length: %d\r\n\r\n%s", len(m), m)
+	}
+	if err := Serve(&in, &out); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(&out)
+	replies := map[int]map[string]any{}
+	for {
+		data, err := readFrame(r)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		if id, ok := m["id"].(float64); ok {
+			replies[int(id)] = m
+		}
+	}
+	caps := replies[1]["result"].(map[string]any)["capabilities"].(map[string]any)
+	if caps["documentFormattingProvider"] != true {
+		t.Errorf("initialize capabilities do not advertise formatting: %v", caps)
+	}
+	edits, ok := replies[2]["result"].([]any)
+	if !ok || len(edits) != 1 {
+		t.Fatalf("formatting result: %v", replies[2])
+	}
+	edit := edits[0].(map[string]any)
+	want, err := scheme.Format(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edit["newText"] != want {
+		t.Errorf("newText = %q, want %q", edit["newText"], want)
+	}
+	rng := edit["range"].(map[string]any)
+	if rng["start"].(map[string]any)["line"] != float64(0) || rng["end"].(map[string]any)["line"] != float64(2) {
+		t.Errorf("the edit does not span the document: %v", rng)
 	}
 }
