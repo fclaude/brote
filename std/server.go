@@ -23,6 +23,7 @@ type serverObj struct {
 	ctx    context.Context
 	mu     sync.Mutex
 	hs     *http.Server
+	ln     net.Listener
 	addr   string
 	routes map[string]scheme.Value
 	closed bool
@@ -42,7 +43,10 @@ func (s *serverObj) stop() error {
 	}
 	s.closed = true
 	// Close, not just the listener: a kept-alive connection would otherwise
-	// go on answering requests after the server was stopped.
+	// go on answering requests after the server was stopped. The listener is
+	// closed here too, since the Serve goroutine may not have started yet and
+	// would leave the port accepting until it did.
+	_ = s.ln.Close()
 	return s.hs.Close()
 }
 
@@ -169,7 +173,7 @@ func installServe(s *installer) error {
 				s.report(Net, "serve", addr, err)
 				return scheme.Value{}, err
 			}
-			srv := &serverObj{in: c.In, ctx: c.In.DetachedContext(c.Ctx), addr: ln.Addr().String(), routes: routes}
+			srv := &serverObj{in: c.In, ctx: c.In.DetachedContext(c.Ctx), ln: ln, addr: ln.Addr().String(), routes: routes}
 			srv.hs = &http.Server{
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					srv.handle(w, r, s.pol, func(op, target string, err error) { s.report(Net, op, target, err) })

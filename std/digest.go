@@ -216,7 +216,15 @@ func installDigest(s *installer) error {
 				return scheme.False, nil
 			}
 			sum := sha256.Sum256([]byte(msg))
-			return scheme.Bool(ecdsa.VerifyASN1(&ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, sum[:], sig)), nil
+			raw := make([]byte, 65)
+			raw[0] = 4
+			x.FillBytes(raw[1:33])
+			y.FillBytes(raw[33:])
+			pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), raw)
+			if err != nil {
+				return scheme.Value{}, fmt.Errorf("argument 1: public key is not a P-256 point")
+			}
+			return scheme.Bool(ecdsa.VerifyASN1(pub, sum[:], sig)), nil
 		},
 	})
 	return nil

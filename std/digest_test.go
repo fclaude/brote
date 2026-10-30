@@ -47,9 +47,15 @@ func TestSignVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ecPub := elliptic.MarshalCompressed(elliptic.P256(), ecPriv.X, ecPriv.Y)
-	d := make([]byte, 32)
-	ecPriv.D.FillBytes(d)
+	d, err := ecPriv.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncompressed, err := ecPriv.PublicKey.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecPub := append([]byte{2 + uncompressed[64]&1}, uncompressed[1:33]...)
 	ecPol := fmt.Sprintf(`(policy (digest (keys "%s")))`, hex.EncodeToString(ecPub))
 	expect(t, ecPol, map[string]string{
 		fmt.Sprintf(`(ecdsa-verify "%s" "hello" (ecdsa-sign "%s" "hello"))`, hex.EncodeToString(ecPub), hex.EncodeToString(d)): `#t`,
