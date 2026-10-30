@@ -159,3 +159,27 @@ func TestCharactersDoNotUnbalanceTheSyntax(t *testing.T) {
 		t.Errorf("the call of f does not lead to its definition")
 	}
 }
+
+func TestSideEffectWarnings(t *testing.T) {
+	// A side effect in a swap! handler warns; nested inside another retried
+	// handler it warns too; a pure handler warns nothing.
+	cases := []struct{ src, want string }{
+		{`(swap! a (lambda (n) (display n) (+ n 1)))`, "swap! may call this procedure more than once"},
+		{`(hash-update! h "k" (lambda (n) (hash-update! other "k" (lambda (m) (display m) m) 0) (+ n 1)) 0)`, "hash-update! may call this procedure more than once"},
+	}
+	for _, c := range cases {
+		got := warnings(c.src)
+		if len(got) == 0 || !strings.Contains(got[0], c.want) {
+			t.Errorf("%s: got %q, want a warning containing %q", c.src, got, c.want)
+		}
+	}
+	for _, src := range []string{
+		`(swap! a (lambda (n) (+ n 1)))`,
+		`(hash-update! h "k" (lambda (n) (* n 2)) 0)`,
+		`(swap! a (lambda (n) (if (> n 0) (+ n 1) 0)))`,
+	} {
+		if got := warnings(src); len(got) != 0 {
+			t.Errorf("%s: unexpected warnings %q", src, got)
+		}
+	}
+}

@@ -34,13 +34,17 @@ separate sessions for host configuration files and unrelated Scheme files.
 
 ## Current limits
 
-Navigation is within each document; workspace search covers open documents only.
-Host-specific module imports, dynamic bindings, macros and inferred types are
-not resolved. Unknown names are not errors. The server advertises
-`textDocument/formatting`, which returns the same re-indentation `brote fmt`
-gives; it does not advertise rename, signature help or semantic tokens.
-Coigüe currently uses its diagnostics and navigation; completion and hover
-need editor UI support.
+Navigation is within each document; workspace search and rename index every
+`.scm` file under the `rootUri` the client sent at initialize (bounded at 2000
+files of 1 MB, hidden directories skipped), open documents winning, so they
+reach files that were never opened. Host-specific module imports, dynamic
+bindings, macros and inferred types are not resolved. Unknown names are not
+errors. The server advertises `textDocument/formatting` (the same
+re-indentation `brote fmt` gives), `textDocument/rename` (every definition and
+reference of the name in every indexed file) and `textDocument/semanticTokens/full`
+(functions, variables, builtins and keywords, per the advertised legend); it
+does not advertise signature help. Coigüe currently uses its diagnostics and
+navigation; completion and hover need editor UI support.
 
 Run `python3 scripts/lsp-smoke.py /path/to/brote-lsp` to exercise the packaged
 server's real stdio connection and host-profile support.

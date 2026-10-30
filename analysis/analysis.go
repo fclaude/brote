@@ -182,6 +182,9 @@ func byteAtRunePosition(text string, line, col int) int {
 func before(a, b Position) bool {
 	return a.Line < b.Line || a.Line == b.Line && a.Character < b.Character
 }
+
+// Before reports whether position a sorts before b.
+func Before(a, b Position) bool         { return before(a, b) }
 func contains(r Range, p Position) bool { return !before(p, r.Start) && before(p, r.End) }
 func (d *Document) At(p Position) *Reference {
 	for i := range d.References {

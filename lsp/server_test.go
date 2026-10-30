@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -133,5 +135,95 @@ func TestFormatting(t *testing.T) {
 	rng := edit["range"].(map[string]any)
 	if rng["start"].(map[string]any)["line"] != float64(0) || rng["end"].(map[string]any)["line"] != float64(2) {
 		t.Errorf("the edit does not span the document: %v", rng)
+	}
+}
+
+func TestRenameSemanticSearch(t *testing.T) {
+	// A workspace file that is never opened.
+	dir := t.TempDir()
+	bPath := filepath.Join(dir, "b.scm")
+	if err := os.WriteFile(bPath, []byte("(define shared 1)\n(display shared)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	open := "(define (f x) (display (+ x shared)))\n(f 1)\n"
+	openJSON, _ := json.Marshal(open)
+	messages := []string{
+		fmt.Sprintf(`{"id":1,"method":"initialize","params":{"rootUri":"file://%s","initializationOptions":{"hostProfile":{"name":"t","symbols":[]}}}}`, dir),
+		`{"method":"initialized"}`,
+		fmt.Sprintf(`{"method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///a.scm","version":1,"text":%s}}}`, openJSON),
+		// Rename f: the definition and its uses, in every indexed file.
+		`{"id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///a.scm"},"position":{"line":0,"character":9},"newName":"g"}}`,
+		// Workspace search finds shared in b.scm, never opened.
+		`{"id":3,"method":"workspace/symbol","params":{"query":"shared"}}`,
+		// Semantic tokens: f is a function (type 1), display a builtin (type 3).
+		`{"id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///a.scm"}}}`,
+		`{"id":5,"method":"shutdown"}`, `{"method":"exit"}`,
+	}
+	var in, out bytes.Buffer
+	for _, m := range messages {
+		fmt.Fprintf(&in, "Content-Length: %d\r\n\r\n%s", len(m), m)
+	}
+	if err := Serve(&in, &out); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(&out)
+	replies := map[int]map[string]any{}
+	for {
+		data, err := readFrame(r)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		if id, ok := m["id"].(float64); ok {
+			replies[int(id)] = m
+		}
+	}
+	caps := replies[1]["result"].(map[string]any)["capabilities"].(map[string]any)
+	if caps["renameProvider"] != true {
+		t.Errorf("rename not advertised: %v", caps)
+	}
+	if _, ok := caps["semanticTokensProvider"]; !ok {
+		t.Errorf("semantic tokens not advertised: %v", caps)
+	}
+	// Rename: a.scm's f definition and reference, renamed to g.
+	changes := replies[2]["result"].(map[string]any)["changes"].(map[string]any)
+	edits, ok := changes["file:///a.scm"].([]any)
+	if !ok || len(edits) < 2 {
+		t.Fatalf("rename edits in a.scm: %v", changes)
+	}
+	for _, e := range edits {
+		if e.(map[string]any)["newText"] != "g" {
+			t.Errorf("edit newText = %v", e)
+		}
+	}
+	// Workspace search: shared is found in the unopened b.scm too.
+	syms := replies[3]["result"].([]any)
+	foundB := false
+	for _, s := range syms {
+		loc := s.(map[string]any)["location"].(map[string]any)
+		if loc["uri"] == "file://"+bPath && s.(map[string]any)["name"] == "shared" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Errorf("workspace search did not find shared in the unopened file: %v", syms)
+	}
+	// Semantic tokens: five numbers per token, with a function and a builtin.
+	data := replies[4]["result"].(map[string]any)["data"].([]any)
+	if len(data)%5 != 0 || len(data) == 0 {
+		t.Fatalf("token data not in fives: %v", data)
+	}
+	types := map[float64]bool{}
+	for i := 3; i < len(data); i += 5 {
+		types[data[i].(float64)] = true
+	}
+	if !types[1] || !types[3] {
+		t.Errorf("token types %v lack a function (1) or builtin (3) token", types)
 	}
 }

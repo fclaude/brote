@@ -9,6 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -18,6 +23,13 @@ import (
 )
 
 const MaxMessage = 4 << 20
+
+// maxWorkspaceFiles bounds how many files the server indexes under the
+// workspace root, and maxWorkspaceFile their size.
+const (
+	maxWorkspaceFiles = 2000
+	maxWorkspaceFile  = 1 << 20
+)
 
 type message struct {
 	ID     json.RawMessage `json:"id"`
@@ -32,6 +44,8 @@ type document struct {
 }
 type Server struct {
 	documents             map[string]*document
+	workspace             map[string]*document // indexed under the root URI, open or not
+	root                  string
 	profile               analysis.Profile
 	initialized, shutdown bool
 	writer                io.Writer
@@ -48,7 +62,7 @@ type rpcError struct {
 // Serve runs until exit or EOF. Messages and documents are bounded. All writes
 // are serialized on this goroutine, keeping stdout strictly LSP-framed JSON.
 func Serve(in io.Reader, out io.Writer) error {
-	s := &Server{documents: map[string]*document{}, writer: out}
+	s := &Server{documents: map[string]*document{}, workspace: map[string]*document{}, writer: out}
 	r := bufio.NewReader(in)
 	for {
 		data, err := readFrame(r)
@@ -149,6 +163,7 @@ func (s *Server) handle(m message) (any, int, error) {
 			return nil, -32600, errors.New("already initialized")
 		}
 		var p struct {
+			RootURI string `json:"rootUri"`
 			Options struct {
 				HostProfile analysis.Profile `json:"hostProfile"`
 			} `json:"initializationOptions"`
@@ -160,8 +175,10 @@ func (s *Server) handle(m message) (any, int, error) {
 			return invalid(err)
 		}
 		s.profile = p.Options.HostProfile
+		s.root = p.RootURI
 		s.initialized = true
-		return map[string]any{"serverInfo": map[string]any{"name": "brote-lsp"}, "capabilities": map[string]any{"positionEncoding": "utf-16", "textDocumentSync": map[string]any{"openClose": true, "change": 1}, "documentSymbolProvider": true, "definitionProvider": true, "referencesProvider": true, "workspaceSymbolProvider": true, "hoverProvider": true, "documentFormattingProvider": true, "completionProvider": map[string]any{}}}, 0, nil
+		s.indexWorkspace()
+		return map[string]any{"serverInfo": map[string]any{"name": "brote-lsp"}, "capabilities": map[string]any{"positionEncoding": "utf-16", "textDocumentSync": map[string]any{"openClose": true, "change": 1}, "documentSymbolProvider": true, "definitionProvider": true, "referencesProvider": true, "workspaceSymbolProvider": true, "hoverProvider": true, "documentFormattingProvider": true, "renameProvider": true, "semanticTokensProvider": map[string]any{"legend": map[string]any{"tokenTypes": []string{"keyword", "function", "variable", "builtin"}, "tokenModifiers": []string{}}, "full": true}, "completionProvider": map[string]any{}}}, 0, nil
 	}
 	if !s.initialized {
 		return nil, -32002, errors.New("server not initialized")
@@ -239,10 +256,10 @@ func (s *Server) handle(m message) (any, int, error) {
 			return invalid(err)
 		}
 		out := []any{}
-		for _, d := range s.documents {
+		for uri, d := range s.allDocuments() {
 			for _, def := range d.analysis.Definitions {
 				if strings.Contains(strings.ToLower(def.Name), strings.ToLower(p.Query)) {
-					out = append(out, map[string]any{"name": def.Name, "kind": symbolKind(def), "location": location{d.uri, def.Range}})
+					out = append(out, map[string]any{"name": def.Name, "kind": symbolKind(def), "location": location{uri, def.Range}})
 				}
 			}
 		}
@@ -253,6 +270,7 @@ func (s *Server) handle(m message) (any, int, error) {
 			URI string `json:"uri"`
 		} `json:"textDocument"`
 		Position analysis.Position `json:"position"`
+		NewName  string            `json:"newName"`
 		Context  struct {
 			IncludeDeclaration bool `json:"includeDeclaration"`
 		} `json:"context"`
@@ -262,7 +280,7 @@ func (s *Server) handle(m message) (any, int, error) {
 	}
 	d := s.documents[p.TextDocument.URI]
 	switch m.Method {
-	case "textDocument/documentSymbol", "textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/completion", "textDocument/formatting":
+	case "textDocument/documentSymbol", "textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/completion", "textDocument/formatting", "textDocument/rename", "textDocument/semanticTokens/full":
 		if d == nil {
 			return invalid(errors.New("document is not open"))
 		}
@@ -270,6 +288,41 @@ func (s *Server) handle(m message) (any, int, error) {
 		return nil, -32601, fmt.Errorf("method not found: %s", m.Method)
 	}
 	switch m.Method {
+	case "textDocument/rename":
+		def := d.analysis.DefinitionAt(p.Position)
+		if def == nil {
+			return invalid(errors.New("no defined name at this position"))
+		}
+		if forms, err := scheme.Read(p.NewName); err != nil || len(forms) != 1 || forms[0].Kind != scheme.KSymbol || forms[0].S != p.NewName {
+			return invalid(fmt.Errorf("newName %q is not a name", p.NewName))
+		}
+		changes := map[string][]any{}
+		for uri, doc := range s.allDocuments() {
+			var edits []any
+			seen := map[analysis.Range]bool{}
+			add := func(r analysis.Range) {
+				if !seen[r] {
+					seen[r] = true
+					edits = append(edits, map[string]any{"range": r, "newText": p.NewName})
+				}
+			}
+			for _, df := range doc.analysis.Definitions {
+				if df.Name == def.Name {
+					add(df.Range)
+				}
+			}
+			for _, r := range doc.analysis.References {
+				if r.Name == def.Name {
+					add(r.Range)
+				}
+			}
+			if len(edits) > 0 {
+				changes[uri] = edits
+			}
+		}
+		return map[string]any{"changes": changes}, 0, nil
+	case "textDocument/semanticTokens/full":
+		return map[string]any{"data": semanticTokens(d.analysis)}, 0, nil
 	case "textDocument/formatting":
 		out, err := scheme.Format(d.text)
 		if err != nil {
@@ -324,3 +377,118 @@ func symbolKind(d *analysis.Definition) int {
 
 // utf16Len is the length of s in UTF-16 code units, what LSP positions count.
 func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// allDocuments is the open documents plus every file indexed under the
+// workspace root, open ones winning.
+func (s *Server) allDocuments() map[string]*document {
+	out := make(map[string]*document, len(s.workspace)+len(s.documents))
+	for uri, d := range s.workspace {
+		out[uri] = d
+	}
+	for uri, d := range s.documents {
+		out[uri] = d
+	}
+	return out
+}
+
+// indexWorkspace analyzes every .scm file under the root URI, bounded, so
+// workspace search and rename reach files that were never opened.
+func (s *Server) indexWorkspace() {
+	if s.root == "" {
+		return
+	}
+	u, err := url.Parse(s.root)
+	if err != nil || u.Scheme != "file" || u.Path == "" {
+		return
+	}
+	root := u.Path
+	_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entries are skipped, not fatal
+		}
+		if e.IsDir() {
+			if p != root && strings.HasPrefix(e.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".scm") || len(s.workspace) >= maxWorkspaceFiles {
+			if len(s.workspace) >= maxWorkspaceFiles {
+				return filepath.SkipAll
+			}
+			return nil
+		}
+		if fi, err := e.Info(); err != nil || fi.Size() > maxWorkspaceFile {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		uri := "file://" + p
+		s.workspace[uri] = &document{uri: uri, text: string(data), analysis: analysis.Analyze(string(data), s.profile)}
+		return nil
+	})
+}
+
+// semantic token types, in the order the legend advertises them.
+const (
+	tokKeyword = 0
+	tokFunction = 1
+	tokVariable = 2
+	tokBuiltin  = 3
+)
+
+// semanticTokens encodes a document's definitions and references as LSP
+// semantic tokens: user functions and variables get their own types,
+// builtins and host symbols another, delta-encoded five numbers per token.
+func semanticTokens(d *analysis.Document) []int {
+	type tok struct {
+		rng analysis.Range
+		typ int
+	}
+	var toks []tok
+	seen := map[analysis.Range]bool{}
+	for _, def := range d.Definitions {
+		t := tokVariable
+		if def.Function {
+			t = tokFunction
+		}
+		toks = append(toks, tok{def.Range, t})
+		seen[def.Range] = true
+	}
+	for _, r := range d.References {
+		if seen[r.Range] {
+			continue
+		}
+		var t int
+		switch {
+		case r.Definition != nil && r.Definition.Function:
+			t = tokFunction
+		case r.Definition != nil:
+			t = tokVariable
+		default:
+			if _, ok := d.Symbols[r.Name]; !ok {
+				continue // unknown name: no claim
+			}
+			t = tokBuiltin
+		}
+		toks = append(toks, tok{r.Range, t})
+		seen[r.Range] = true
+	}
+	sort.SliceStable(toks, func(i, j int) bool {
+		return analysis.Before(toks[i].rng.Start, toks[j].rng.Start)
+	})
+	var data []int
+	prevLine, prevChar := 0, 0
+	for _, t := range toks {
+		dl := t.rng.Start.Line - prevLine
+		dc := t.rng.Start.Character
+		if t.rng.Start.Line == prevLine {
+			dc -= prevChar
+		}
+		data = append(data, dl, dc, t.rng.End.Character-t.rng.Start.Character, t.typ, 0)
+		prevLine, prevChar = t.rng.Start.Line, t.rng.Start.Character
+	}
+	return data
+}
