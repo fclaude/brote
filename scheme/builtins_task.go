@@ -107,6 +107,7 @@ func (in *Interp) registerTasks() {
 	in.registerChannels()
 	in.registerGroups()
 	in.registerLocks()
+	in.registerPromises()
 	in.mustRegisterOpaque("task?", "True for tasks.", []Param{{Name: "x", Type: "any"}}, false, func(c *Call) (Value, error) {
 		_, ok := ObjectOf(c.Args[0]).(*taskObj)
 		return Bool(ok), nil

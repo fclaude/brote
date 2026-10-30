@@ -487,6 +487,15 @@ Waiting for several things, and sharing data safely:
 | `(compare-and-set! a old new)` | store `new` only if the value is `eqv?` to `old`; whether it did |
 | `(make-once)` `(once-do o thunk)` | run `thunk` unless a task already has, and return its value, the same for every caller. A task that asks while another is running it waits. If it fails nothing is remembered |
 
+Promises delay a value until something needs it:
+
+| | |
+|---|---|
+| `(delay expr)` | a promise: `expr` is not evaluated yet (a macro, since only a macro can capture its expression unevaluated) |
+| `(make-promise thunk)` | a promise that will run `thunk` (a procedure of no arguments) on the first `force` |
+| `(force p)` | run the promise's body if no task has yet — the body runs exactly once — and return its value, the same for every caller; a chain of promises is unwrapped. A value that is not a promise is returned as it is |
+| `(promise? x)` | |
+
 ```lisp
 (define counts (make-hash))
 (pfor-each (lambda (word) (hash-update! counts word (lambda (n) (+ n 1)) 0)) words)
@@ -625,6 +634,7 @@ environment before anything else. It defines, in Scheme:
 | `(string-index s sub)` | the rune index of the first occurrence of `sub` in `s`, or `#f` |
 | `(string-pad-left s n [pad])` `(string-pad-right s n [pad])` | add `pad` (default `" "`) at the left or right until `s` is at least `n` runes long; never cuts |
 | `(vector-map f v)` `(vector-for-each f v)` | `map` and `for-each` over one vector (`vector-map` makes a new vector) |
+| `(delay expr)` | a promise for `expr`, evaluated on the first `force` (needs the task grant, like the rest of §5's Tasks procedures) |
 | `(string-empty? s)` | |
 | `(test name body …)` `(assert expr)` `(assert-equal expected expr)` `(assert-error expr [text])` `(test-results)` `(run-test name thunk)` | testing, written in Scheme; see [stdlib.md](stdlib.md#tests). The first four are macros |
 
