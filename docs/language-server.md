@@ -37,11 +37,15 @@ separate sessions for host configuration files and unrelated Scheme files.
 Navigation is within each document; workspace search and rename index every
 `.scm` file under the `rootUri` the client sent at initialize (bounded at 2000
 files of 1 MB, hidden directories skipped), open documents winning, so they
-reach files that were never opened. Host-specific module imports, dynamic
+reach files that were never opened. An indexed file that changed on disk is
+read again before it is searched or renamed in; files created after
+initialize are not indexed. Host-specific module imports, dynamic
 bindings, macros and inferred types are not resolved. Unknown names are not
 errors. The server advertises `textDocument/formatting` (the same
-re-indentation `brote fmt` gives), `textDocument/rename` (every definition and
-reference of the name in every indexed file) and `textDocument/semanticTokens/full`
+re-indentation `brote fmt` gives), `textDocument/rename` (for a parameter or local
+binding, its uses in that document; for a top-level name, its top-level
+definitions and the uses that resolve to them in every indexed file, never a
+local binding of the same name) and `textDocument/semanticTokens/full`
 (functions, variables, builtins and keywords, per the advertised legend); it
 does not advertise signature help. Coigüe currently uses its diagnostics and
 navigation; completion and hover need editor UI support.

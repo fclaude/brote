@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/fclaude/brote/analysis"
@@ -41,6 +42,11 @@ type document struct {
 	version  int
 	text     string
 	analysis *analysis.Document
+	// For a file indexed from disk, what it was when read: a change on disk
+	// is read again before the index is used.
+	path    string
+	size    int64
+	modTime time.Time
 }
 type Server struct {
 	documents             map[string]*document
@@ -297,28 +303,48 @@ func (s *Server) handle(m message) (any, int, error) {
 			return invalid(fmt.Errorf("newName %q is not a name", p.NewName))
 		}
 		changes := map[string][]any{}
-		for uri, doc := range s.allDocuments() {
+		addEdits := func(uri string, ranges []analysis.Range) {
 			var edits []any
 			seen := map[analysis.Range]bool{}
-			add := func(r analysis.Range) {
+			for _, r := range ranges {
 				if !seen[r] {
 					seen[r] = true
 					edits = append(edits, map[string]any{"range": r, "newText": p.NewName})
 				}
 			}
-			for _, df := range doc.analysis.Definitions {
-				if df.Name == def.Name {
-					add(df.Range)
-				}
-			}
-			for _, r := range doc.analysis.References {
-				if r.Name == def.Name {
-					add(r.Range)
-				}
-			}
 			if len(edits) > 0 {
 				changes[uri] = edits
 			}
+		}
+		if !def.Global {
+			// A parameter or local binding: its uses in this document, and
+			// nothing else of the same name.
+			ranges := []analysis.Range{def.Range}
+			for _, r := range d.analysis.References {
+				if r.Definition == def {
+					ranges = append(ranges, r.Range)
+				}
+			}
+			addEdits(p.TextDocument.URI, ranges)
+			return map[string]any{"changes": changes}, 0, nil
+		}
+		// A top-level name: the top-level definitions of it in every indexed
+		// file, and the references that resolve to one or to nothing in their
+		// own file (a use of another file's definition) — never one a local
+		// binding of the same name shadows.
+		for uri, doc := range s.allDocuments() {
+			var ranges []analysis.Range
+			for _, df := range doc.analysis.Definitions {
+				if df.Global && df.Name == def.Name {
+					ranges = append(ranges, df.Range)
+				}
+			}
+			for _, r := range doc.analysis.References {
+				if r.Name == def.Name && (r.Definition == nil || r.Definition.Global) {
+					ranges = append(ranges, r.Range)
+				}
+			}
+			addEdits(uri, ranges)
 		}
 		return map[string]any{"changes": changes}, 0, nil
 	case "textDocument/semanticTokens/full":
@@ -379,16 +405,65 @@ func symbolKind(d *analysis.Definition) int {
 func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
 
 // allDocuments is the open documents plus every file indexed under the
-// workspace root, open ones winning.
+// workspace root, an open document winning over the indexed copy of the same
+// file however its URI is spelled. An indexed file that changed on disk is
+// read again first, and one that is gone is dropped.
 func (s *Server) allDocuments() map[string]*document {
 	out := make(map[string]*document, len(s.workspace)+len(s.documents))
-	for uri, d := range s.workspace {
-		out[uri] = d
-	}
+	open := make(map[string]bool, len(s.documents))
 	for uri, d := range s.documents {
+		out[uri] = d
+		open[uriKey(uri)] = true
+	}
+	for uri, d := range s.workspace {
+		if open[uriKey(uri)] {
+			continue
+		}
+		fi, err := os.Stat(d.path)
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxWorkspaceFile {
+			delete(s.workspace, uri)
+			continue
+		}
+		if fi.Size() != d.size || !fi.ModTime().Equal(d.modTime) {
+			nd := s.readWorkspaceFile(d.path)
+			if nd == nil {
+				delete(s.workspace, uri)
+				continue
+			}
+			s.workspace[uri], d = nd, nd
+		}
 		out[uri] = d
 	}
 	return out
+}
+
+// uriKey is what identifies a document's file whatever escaping its URI
+// uses: the cleaned path of a file: URI, or the URI itself.
+func uriKey(uri string) string {
+	if u, err := url.Parse(uri); err == nil && u.Scheme == "file" && u.Path != "" {
+		return "file:" + filepath.Clean(u.Path)
+	}
+	return uri
+}
+
+// fileURI is the file: URI of an absolute path, escaped as clients send it.
+func fileURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+}
+
+// readWorkspaceFile reads and analyzes one file of the workspace, or returns
+// nil when it cannot be read or is over the size limit.
+func (s *Server) readWorkspaceFile(path string) *document {
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxWorkspaceFile {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	uri := fileURI(path)
+	return &document{uri: uri, text: string(data), analysis: analysis.Analyze(string(data), s.profile), path: path, size: fi.Size(), modTime: fi.ModTime()}
 }
 
 // indexWorkspace analyzes every .scm file under the root URI, bounded, so
@@ -401,7 +476,7 @@ func (s *Server) indexWorkspace() {
 	if err != nil || u.Scheme != "file" || u.Path == "" {
 		return
 	}
-	root := u.Path
+	root := filepath.FromSlash(u.Path)
 	_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable entries are skipped, not fatal
@@ -412,21 +487,15 @@ func (s *Server) indexWorkspace() {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(p, ".scm") || len(s.workspace) >= maxWorkspaceFiles {
-			if len(s.workspace) >= maxWorkspaceFiles {
-				return filepath.SkipAll
-			}
+		if len(s.workspace) >= maxWorkspaceFiles {
+			return filepath.SkipAll
+		}
+		if !strings.HasSuffix(p, ".scm") {
 			return nil
 		}
-		if fi, err := e.Info(); err != nil || fi.Size() > maxWorkspaceFile {
-			return nil
+		if d := s.readWorkspaceFile(p); d != nil {
+			s.workspace[d.uri] = d
 		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		uri := "file://" + p
-		s.workspace[uri] = &document{uri: uri, text: string(data), analysis: analysis.Analyze(string(data), s.profile)}
 		return nil
 	})
 }

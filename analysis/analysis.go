@@ -45,6 +45,9 @@ type Definition struct {
 	Scope      Range
 	Function   bool
 	Parameters []string
+	// Global is true for a top-level definition, one other files can see;
+	// false for a parameter or a local binding.
+	Global bool
 }
 type Reference struct {
 	Name       string
@@ -282,7 +285,7 @@ func (w walker) bind(n *scheme.Syntax, s *scope, fun bool) *Definition {
 	if old := s.bindings[n.Atom]; old != nil && old.Range == w.d.rng(n.Start, n.End) {
 		return old
 	}
-	d := &Definition{Name: n.Atom, Range: w.d.rng(n.Start, n.End), Scope: w.d.rng(s.start, s.end), Function: fun}
+	d := &Definition{Name: n.Atom, Range: w.d.rng(n.Start, n.End), Scope: w.d.rng(s.start, s.end), Function: fun, Global: s.parent == nil}
 	s.bindings[d.Name] = d
 	w.d.Definitions = append(w.d.Definitions, d)
 	return d
