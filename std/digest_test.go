@@ -23,7 +23,7 @@ func TestSignVerify(t *testing.T) {
 	expect(t, pol, map[string]string{
 		fmt.Sprintf(`(ed25519-verify "%s" "hello" (ed25519-sign "%s" "hello"))`, pubHex, privHex): `#t`,
 		fmt.Sprintf(`(ed25519-verify "%s" "hellp" (ed25519-sign "%s" "hello"))`, pubHex, privHex): `#f`,
-		fmt.Sprintf(`(ed25519-verify "%s" "hello" "not-hex")`, pubHex):                           `#f`,
+		fmt.Sprintf(`(ed25519-verify "%s" "hello" "not-hex")`, pubHex):                            `#f`,
 	})
 	// A different public key does not verify the signature: grant both keys,
 	// and verification under the wrong one is #f.
