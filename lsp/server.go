@@ -433,7 +433,7 @@ func (s *Server) indexWorkspace() {
 
 // semantic token types, in the order the legend advertises them.
 const (
-	tokKeyword = 0
+	tokKeyword  = 0
 	tokFunction = 1
 	tokVariable = 2
 	tokBuiltin  = 3
