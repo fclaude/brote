@@ -410,5 +410,5 @@ func installNet(s *installer) error {
 			return v, err
 		},
 	})
-	return nil
+	return installServe(s)
 }

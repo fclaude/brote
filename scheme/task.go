@@ -40,6 +40,17 @@ func (t *task) isRoot() bool { return t.obj != nil && t.obj.id == 0 }
 // a second interpreter with its own context does not borrow the first's task.
 type taskKey struct{ in *Interp }
 
+// DetachedContext returns a context that keeps ctx's values but carries no
+// task of this interpreter, so an evaluation started from another goroutine
+// with it — Apply, EvalString — begins a new root of its own, like a detached
+// task, while still seeing the values the host put in ctx (the origin, the
+// calling module's policy). ctx's cancellation does not propagate: the work
+// outlives the call that started it.
+func (in *Interp) DetachedContext(ctx context.Context) context.Context {
+	// A nil under the task key reads as "no task here": enter starts a new one.
+	return context.WithValue(context.WithoutCancel(ctx), taskKey{in}, nil)
+}
+
 // enter returns the task ctx belongs to and a context that carries it. A
 // context that carries none starts a new task (the root of a new evaluation),
 // so a host call from outside any evaluation is its own; a handler that passes

@@ -250,6 +250,17 @@ One procedure sends an HTTP or HTTPS request, and a few Scheme definitions wrap 
 | `(http-get-json url [headers])` | the response body parsed as JSON. A status of 400 or more is an error |
 | `(http-post-json url value [headers])` | send `value` as JSON, return the parsed JSON reply. A status of 400 or more is an error |
 
+A net grant also lets a script serve HTTP, not only call it:
+
+| Procedure | What it gives back |
+|---|---|
+| `(serve addr routes)` | start a server on `addr` (`"host:port"`; port 0 picks a free one) serving `routes`, an alist of path to handler procedure; returns a server |
+| `(server-address srv)` | the bound `"host:port"` |
+| `(server-stop! srv)` | stop it; void |
+| `(server? x)` | |
+
+The handler is called with an alist `((method . "GET") (path . "/") (body . "…"))` and returns a string (sent with status 200) or a list `(status body)`. A path with no route gets a 404. Request bodies and responses are capped at `max-body`, and a handler runs under the `timeout`. Each handler call runs under the context of the evaluation that called `serve`, so a gate and a per-caller policy see that caller. Binding a loopback address is allowed whenever `net` is granted; binding any other host requires the host to be in the `(allow …)` list. A server runs until `server-stop!` or the host closes the runtime, not only until the evaluation that started it ends.
+
 Headers are an association list of names and values: `'(("authorization" . "Bearer …"))`. A status of 400 or more from `http-request` is a result you look at, not an error. These are errors: a host the policy did not name, a method it did not allow (get and head unless it says more), a redirect to such a host, a body over the limit (5 MB), a timeout (30 seconds), and a connection to a private or local address the policy did not allow.
 
 ```lisp
