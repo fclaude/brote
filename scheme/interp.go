@@ -148,8 +148,10 @@ func WithBaseDir(dir string) Option { return func(in *Interp) { in.baseDir = dir
 // run forever even with a context that never ends. The budget fires only when
 // it is spent, so no steps are left to handle the error with — like a
 // cancelled context, guard cannot catch it in practice. n <= 0 means no
-// budget. The budget is per evaluation (per task), not for the whole
-// interpreter, and does not count the prelude the interpreter itself loads.
+// budget. The budget is per evaluation, not for the whole interpreter: the
+// tasks an evaluation spawns, detached or not, draw on the same budget, so
+// spawning cannot escape it. It does not count the prelude the interpreter
+// itself loads.
 func WithMaxSteps(n int64) Option {
 	return func(in *Interp) {
 		if n > 0 {
@@ -406,8 +408,7 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 	}()
 	for {
 		if in.maxSteps > 0 {
-			t.steps++
-			if t.steps > in.maxSteps {
+			if t.steps.Add(1) > in.maxSteps {
 				return Value{}, errorf("eval", "step budget exhausted: more than %d evaluation steps", in.maxSteps)
 			}
 		}

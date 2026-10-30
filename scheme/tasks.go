@@ -232,7 +232,7 @@ func (in *Interp) startTask(c *Call, parent context.Context, g *groupObj, body t
 	}
 	ctx, cancel := context.WithCancelCause(parent)
 	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, group: g, done: make(chan struct{})}
-	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
+	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj, steps: c.t.steps}
 	ctx = context.WithValue(ctx, taskKey{in}, t)
 	in.quiesce.Lock() // a pair is not changed while a task starts
 	rt.mu.Lock()

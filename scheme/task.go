@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 // task is one thread of evaluation and the state that belongs to it rather
@@ -19,9 +20,11 @@ type task struct {
 	// Tail calls loop inside one eval and do not add to it; limit bounds it.
 	depth int
 	limit int
-	// steps counts the iterations of the eval loop in this task, when the
-	// interpreter has a step budget (WithMaxSteps).
-	steps int64
+	// steps counts the iterations of the eval loop, when the interpreter has
+	// a step budget (WithMaxSteps). Every task an evaluation starts, spawned
+	// or detached, shares the evaluation's counter, so spawning cannot buy a
+	// fresh budget.
+	steps *atomic.Int64
 	// out is where display, write and newline go while with-output-to-string
 	// is capturing; nil means the interpreter's writer.
 	out io.Writer
@@ -66,7 +69,7 @@ func (in *Interp) enter(ctx context.Context) (t *task, _ context.Context, done f
 	if t, ok := ctx.Value(taskKey{in}).(*task); ok {
 		return t, ctx, nil
 	}
-	t = &task{limit: MaxDepth}
+	t = &task{limit: MaxDepth, steps: new(atomic.Int64)}
 	in.quiesce.Lock()
 	in.running++
 	in.quiesce.Unlock()

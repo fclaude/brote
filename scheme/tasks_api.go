@@ -227,7 +227,7 @@ func (in *Interp) spawnDetached(c *Call, thunk Value) (Value, error) {
 	rctx, rcancel := context.WithCancelCause(dctx)
 	r := &root{rt: rt, cancel: rcancel}
 	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, done: make(chan struct{}), detached: true}
-	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj}
+	t := &task{limit: rt.limits.MaxDepth, root: r, obj: obj, steps: c.t.steps}
 	rctx = context.WithValue(rctx, taskKey{in}, t)
 
 	in.quiesce.Lock() // a pair is not changed while a task starts
