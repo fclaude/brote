@@ -356,6 +356,7 @@ a table.
 | `(string-contains? s sub)` `(string-prefix? prefix s)` `(string-suffix? suffix s)` | |
 | `(string-replace s old new)` | replace every occurrence |
 | `(string->symbol s)` `(symbol->string sym)` `(symbol? x)` | |
+| `(gensym [prefix])` | a fresh symbol, named `prefix~n` (`gensym~n` without a prefix), that no earlier call — here or in macro expansion — produced |
 | `(format fmt arg …)` | `~a` display, `~s` write, `~%` newline, `~~` tilde; too few or too many args is an error |
 
 | `(string-ref s k)` | the character at rune index `k`; the time it takes grows with `k` |

@@ -48,8 +48,16 @@ func macroOf(v Value) *macro {
 	return m
 }
 
-// gensyms numbers the names expansion makes up.
+// gensyms numbers the names expansion makes up and the gensym builtin hands
+// out: both draw from this one sequence, so the two never produce the same
+// name.
 var gensyms atomic.Uint64
+
+// gensymName returns a fresh name of the form prefix~n, with n the next
+// number of the shared sequence.
+func gensymName(prefix string) string {
+	return fmt.Sprintf("%s~%d", prefix, gensyms.Add(1))
+}
 
 // parseSyntaxRules reads (syntax-rules [ellipsis] (literal …) (pattern template) …).
 func parseSyntaxRules(who, name string, spec Value) (*macro, error) {
@@ -198,9 +206,8 @@ func (m *macro) expand(form Value) (Value, error) {
 		if m.match(r.pattern, form.P.Cdr, b) {
 			rename := map[string]string{}
 			if len(r.binders) > 0 {
-				n := gensyms.Add(1)
 				for name := range r.binders {
-					rename[name] = fmt.Sprintf("%s~%d", name, n)
+					rename[name] = gensymName(name)
 				}
 			}
 			out, err := (&expander{macro: m}).instantiate(r.template, b, rename, false)

@@ -172,6 +172,17 @@ func (in *Interp) registerStrings() {
 	in.mustRegisterOpaque("symbol?", "True for symbols.", any1, false, func(c *Call) (Value, error) {
 		return Bool(c.Args[0].Kind == KSymbol), nil
 	})
+	in.mustRegisterOpaque("gensym", "A fresh symbol whose name no earlier call — here or in macro expansion — produced: prefix~n, or gensym~n without a prefix.", []Param{{Name: "prefix", Type: "string", Optional: true}}, false, func(c *Call) (Value, error) {
+		prefix := "gensym"
+		if len(c.Args) > 0 {
+			var err error
+			prefix, err = c.String(0)
+			if err != nil {
+				return Value{}, err
+			}
+		}
+		return Sym(gensymName(prefix)), nil
+	})
 	in.mustRegister("format", "Format with ~a (display), ~s (write), ~% (newline), ~~ (tilde).", []Param{{Name: "fmt", Type: "string"}}, true, func(c *Call) (Value, error) {
 		f, err := c.String(0)
 		if err != nil {
