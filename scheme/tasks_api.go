@@ -223,7 +223,9 @@ func (in *Interp) spawnDetached(c *Call, thunk Value) (Value, error) {
 		rt.live.Add(-1)
 		return Value{}, errorf(c.Name, "too many tasks: the limit is %d alive at once", rt.limits.MaxTasks)
 	}
-	dctx, cancel := context.WithCancelCause(context.WithoutCancel(c.Ctx))
+	// A detached task outlives the call that started it, a gate's check
+	// included, so it takes the interpreter's turn at the gate.
+	dctx, cancel := context.WithCancelCause(outsideGate(context.WithoutCancel(c.Ctx)))
 	rctx, rcancel := context.WithCancelCause(dctx)
 	r := &root{rt: rt, cancel: rcancel}
 	obj := &taskObj{id: rt.ids.Add(1), root: r, cancel: cancel, done: make(chan struct{}), detached: true}

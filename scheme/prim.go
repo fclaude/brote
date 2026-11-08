@@ -265,6 +265,21 @@ type ConcurrentGate interface {
 	ConcurrentSafe()
 }
 
+// gateTurn is a turn at a gate that is not safe for concurrent use. A check
+// holds the turn it was given and hands a turn of its own to what it runs:
+// a check may evaluate Scheme in this interpreter itself (a host's gate that
+// asks a judge does), and what that evaluation applies is inside the check,
+// so it takes the check's turn, not the one the check holds, which it would
+// wait for forever. Tasks that evaluation starts share the check's turn and
+// take it one at a time, so the gate still sees one call at a time.
+type gateTurn struct {
+	in  *Interp
+	sem chan struct{}
+}
+
+// inGate keys the turn a check hands on in its context.
+type inGate struct{}
+
 // callGate runs the gate's check, one at a time unless the gate says it may
 // be called concurrently. A task waiting its turn still stops when its
 // context does.
@@ -272,13 +287,26 @@ func (in *Interp) callGate(ctx context.Context, p *Prim, args []Value) error {
 	if _, ok := in.gate.(ConcurrentGate); ok {
 		return in.gate.Before(ctx, p, args)
 	}
+	sem := in.gateSem
+	if turn, _ := ctx.Value(inGate{}).(*gateTurn); turn != nil && turn.in == in {
+		sem = turn.sem
+	}
 	select {
-	case in.gateSem <- struct{}{}:
-		defer func() { <-in.gateSem }()
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return in.gate.Before(ctx, p, args)
+	return in.gate.Before(context.WithValue(ctx, inGate{}, &gateTurn{in: in, sem: make(chan struct{}, 1)}), p, args)
+}
+
+// outsideGate is ctx without a check's turn: for work that outlives the
+// check, which takes the interpreter's turn like any other.
+func outsideGate(ctx context.Context) context.Context {
+	if ctx.Value(inGate{}) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, inGate{}, (*gateTurn)(nil))
 }
 
 // SetGate installs the guard. nil allows everything: an embedder with no guard, such as a test.

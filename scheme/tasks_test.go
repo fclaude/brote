@@ -424,3 +424,142 @@ func TestWaitingFromALaterEvaluationSaysWhyTheTaskIsGone(t *testing.T) {
 	e.ok(t, `(define saved (spawn (lambda () (hold))))`)
 	e.fails(t, `(task-wait saved)`, "when the evaluation that started it ended")
 }
+
+// reentrantGate evaluates Scheme from inside its own check, as a host's gate
+// does when it asks a judge whose question is a Scheme procedure: the inner
+// evaluation's primitives pass the same gate while the outer check waits.
+type reentrantGate struct {
+	in    *scheme.Interp
+	inner atomic.Int64
+}
+
+func (g *reentrantGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+	if p.Name != "outer" {
+		g.inner.Add(1)
+		return nil
+	}
+	_, err := g.in.EvalString(ctx, `(string-append "a" "b")`)
+	return err
+}
+func (g *reentrantGate) RegisterChecker(name, verdict string, predicate scheme.Value) error {
+	return nil
+}
+
+// A gate that is not safe for concurrent use may still evaluate Scheme in
+// its own check: the evaluation it starts takes the check's turn, not the
+// one the check holds. Before 0.9.1 the inner primitive waited for the outer
+// check to end, which waited for it, and the evaluation never returned.
+func TestAGateMayEvaluateSchemeInsideItsCheck(t *testing.T) {
+	for _, tasks := range []bool{false, true} {
+		var opts []scheme.Option
+		if tasks {
+			opts = append(opts, scheme.WithTasks(defaultLimits()))
+		}
+		in := scheme.New(opts...)
+		g := &reentrantGate{in: in}
+		in.SetGate(g)
+		if err := in.Register(&scheme.Prim{Name: "outer", Meta: scheme.Meta{Doc: "test"}, Handler: func(c *scheme.Call) (scheme.Value, error) {
+			return scheme.Str("done"), nil
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		v, err := in.EvalString(ctx, `(outer)`)
+		cancel()
+		if err != nil || v.S != "done" {
+			t.Fatalf("tasks %t: (outer) = %v, %v; want done", tasks, v, err)
+		}
+		if g.inner.Load() == 0 {
+			t.Fatalf("tasks %t: the inner evaluation's primitive never reached the gate", tasks)
+		}
+	}
+}
+
+// overlapReentrantGate evaluates, inside its check of outer, a program that
+// starts tasks, and fails if two of the checks those tasks need run at once.
+type overlapReentrantGate struct {
+	in      *scheme.Interp
+	active  atomic.Int64
+	overlap atomic.Bool
+	inner   atomic.Int64
+}
+
+func (g *overlapReentrantGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+	if p.Name == "outer" {
+		_, err := g.in.EvalString(ctx, `(task-wait-all (map (lambda (i) (spawn (lambda () (let loop ((n 0)) (when (< n 20) (+ n 1) (loop (+ n 1))))))) (iota 8)))`)
+		return err
+	}
+	if g.active.Add(1) > 1 {
+		g.overlap.Store(true)
+	}
+	time.Sleep(100 * time.Microsecond)
+	g.inner.Add(1)
+	g.active.Add(-1)
+	return nil
+}
+func (g *overlapReentrantGate) RegisterChecker(name, verdict string, predicate scheme.Value) error {
+	return nil
+}
+
+// Tasks started by an evaluation inside a check take the check's turn one at
+// a time: they neither wait for the turn the check holds nor reach the gate
+// together.
+func TestTasksInsideAGatesCheckTakeTheChecksTurn(t *testing.T) {
+	in := scheme.New(scheme.WithTasks(defaultLimits()))
+	g := &overlapReentrantGate{in: in}
+	in.SetGate(g)
+	if err := in.Register(&scheme.Prim{Name: "outer", Meta: scheme.Meta{Doc: "test"}, Handler: func(c *scheme.Call) (scheme.Value, error) {
+		return scheme.Str("done"), nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if v, err := in.EvalString(ctx, `(outer)`); err != nil || v.S != "done" {
+		t.Fatalf("(outer) = %v, %v; want done", v, err)
+	}
+	if g.overlap.Load() {
+		t.Error("the tasks inside the check reached the gate together")
+	}
+	if g.inner.Load() < 8*20 {
+		t.Errorf("the gate saw only %d of the tasks' calls", g.inner.Load())
+	}
+}
+
+// detachingGate starts, inside its check of outer, a detached task that
+// keeps applying primitives, and fails if two checks run at once.
+type detachingGate struct{ overlapReentrantGate }
+
+func (g *detachingGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
+	if p.Name == "outer" {
+		_, err := g.in.EvalString(ctx, `(spawn-detached (lambda () (let loop ((n 0)) (when (< n 400) (+ n 1) (loop (+ n 1))))))`)
+		return err
+	}
+	return g.overlapReentrantGate.Before(ctx, p, args)
+}
+
+// A detached task started inside a check outlives it, so it takes the
+// interpreter's turn: it never reaches the gate together with an evaluation
+// that starts after the check.
+func TestADetachedTaskFromAChecksEvaluationTakesTheInterpretersTurn(t *testing.T) {
+	in := scheme.New(scheme.WithTasks(scheme.TaskLimits{Background: true}))
+	t.Cleanup(func() { _ = in.Shutdown(context.Background()) })
+	g := &detachingGate{overlapReentrantGate{in: in}}
+	in.SetGate(g)
+	if err := in.Register(&scheme.Prim{Name: "outer", Meta: scheme.Meta{Doc: "test"}, Handler: func(c *scheme.Call) (scheme.Value, error) {
+		return scheme.Str("done"), nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := in.EvalString(ctx, `(outer)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := in.EvalString(ctx, `(let loop ((n 0)) (when (< n 400) (+ n 1) (loop (+ n 1))))`); err != nil {
+		t.Fatal(err)
+	}
+	if g.overlap.Load() {
+		t.Error("the detached task reached the gate together with a later evaluation")
+	}
+}

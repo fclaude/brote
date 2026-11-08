@@ -54,7 +54,7 @@ type taskKey struct{ in *Interp }
 // outlives the call that started it.
 func (in *Interp) DetachedContext(ctx context.Context) context.Context {
 	// A nil under the task key reads as "no task here": enter starts a new one.
-	return context.WithValue(context.WithoutCancel(ctx), taskKey{in}, nil)
+	return context.WithValue(outsideGate(context.WithoutCancel(ctx)), taskKey{in}, nil)
 }
 
 // enter returns the task ctx belongs to and a context that carries it. A
