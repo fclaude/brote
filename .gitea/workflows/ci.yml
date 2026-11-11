@@ -1,0 +1,66 @@
+name: Gitea checks
+
+# Gitea uses this directory in preference to .github/workflows, whose jobs
+# ask for GitHub's hosted runners (ubuntu-24.04, macos-15): on Gitea they
+# waited for a runner that never came. GitHub alone builds releases and
+# publishes the site; this runs the Linux half of GitHub's CI on the
+# instance's Alpine runners. The optional repository variable
+# BROTE_LINUX_RUNNER overrides the runner label.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitea-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ${{ vars.BROTE_LINUX_RUNNER || 'linux-alpine' }}
+    timeout-minutes: 30
+    env:
+      # Tool archives carry build-machine owners, which the runner cannot set.
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare runner tools
+        run: |
+          mkdir -p "${GOTMPDIR:-$RUNNER_TEMP}" "${TMPDIR:-$RUNNER_TEMP}" "$RUNNER_TEMP"
+          command -v python3
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          # Host jobs reuse local Go caches; archive restore cannot overwrite
+          # read-only module files with the runner's dropped capabilities.
+          cache: false
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Build the command
+        run: |
+          go build -o bin/brote ./cmd/brote
+          go build -o bin/brote-lsp ./cmd/brote-lsp
+          python3 scripts/lsp-smoke.py bin/brote-lsp
+
+      - name: Run a program with the command
+        run: |
+          test "$(bin/brote -e '(map (lambda (x) (* x x)) (iota 5))')" = "(0 1 4 9 16)"
+
+      - name: Run staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
