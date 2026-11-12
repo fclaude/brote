@@ -75,6 +75,6 @@ jobs:
       run:
         shell: powershell
     steps:
-      - uses: builtin:checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Native Windows vet, race tests and builds
         run: python .gitea/native-check.py
