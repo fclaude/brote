@@ -2,7 +2,9 @@ package std
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,15 +159,19 @@ func TestFSWrites(t *testing.T) {
 		}
 	}
 	for src, want := range map[string]string{
-		`(fs-remove "out")`:                 "granted directory itself",
-		`(fs-remove "out/missing")`:         "no such file",
-		`(fs-remove "out/a")`:               "", // not empty: any error
-		`(fs-write-text "out/nodir/x" "x")`: "no such file",
-		`(fs-read-text "out/a")`:            "is a directory",
-		`(fs-rename "out" "out/z")`:         "granted directory itself",
+		`(fs-remove "out")`:         "granted directory itself",
+		`(fs-remove "out/a")`:       "", // not empty: any error
+		`(fs-read-text "out/a")`:    "is a directory",
+		`(fs-rename "out" "out/z")`: "granted directory itself",
 	} {
 		if _, err := f.eval(t, f.policy(), src); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: error %v, want it to contain %q", src, err, want)
+		}
+	}
+	// Assert the wrapped OS error, whose text is localized on Windows.
+	for _, src := range []string{`(fs-remove "out/missing")`, `(fs-write-text "out/nodir/x" "x")`} {
+		if _, err := f.eval(t, f.policy(), src); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: error %v, want fs.ErrNotExist", src, err)
 		}
 	}
 }
