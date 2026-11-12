@@ -120,7 +120,7 @@ func TestBroteTestNothingToRunAndMissingPaths(t *testing.T) {
 func TestBroteTestObeysThePolicy(t *testing.T) {
 	dir := t.TempDir()
 	secret := writeFile(t, dir, "secret.txt", "hush")
-	writeFile(t, dir, "p_test.scm", `(test "reads" (read-file "`+secret+`"))`)
+	writeFile(t, dir, "p_test.scm", `(test "reads" (read-file `+scmString(secret)+`))`)
 	status, out, _ := invoke(t, "", "-sandbox", "test", filepath.Join(dir, "p_test.scm"))
 	if status != 1 || !strings.Contains(out, "FAIL  reads") {
 		t.Fatalf("a sandboxed test read a file: status %d, stdout %q", status, out)

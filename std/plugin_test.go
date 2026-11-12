@@ -68,7 +68,7 @@ func TestPluginGetsOnlyWhatItAskedAndTheHostHas(t *testing.T) {
 	}
 	// It cannot read beside its notes, write at all, or use any module it did not ask for.
 	for _, src := range []string{
-		`(fs-read-text "../secret.txt")`, `(fs-read-text "notes/../../secret.txt")`, `(fs-read-text "` + f.root + `/secret.txt")`,
+		`(fs-read-text "../secret.txt")`, `(fs-read-text "notes/../../secret.txt")`, `(fs-read-text ` + scheme.Write(scheme.Str(f.root+"/secret.txt")) + `)`,
 		`(fs-write-text "notes/x" "no")`, `(http-get "http://api.x.com/")`, `(proc-run '("echo" "hi"))`, `(time-now)`, `(path-join "a")`,
 	} {
 		if _, err := p.Interp.EvalString(context.Background(), src); err == nil {
@@ -148,7 +148,7 @@ func TestPluginLoadStaysInsideTheGrant(t *testing.T) {
 	if v, err := p.Interp.EvalString(context.Background(), `(begin (load "notes/inc.scm") included)`); err != nil || v.I != 42 {
 		t.Errorf("load inside the grant: %v, %v", v, err)
 	}
-	for _, src := range []string{`(load "../outside.scm")`, `(load "` + f.root + `/outside.scm")`, `(load "/etc/hosts")`} {
+	for _, src := range []string{`(load "../outside.scm")`, `(load ` + scheme.Write(scheme.Str(f.root+"/outside.scm")) + `)`, `(load "/etc/hosts")`} {
 		_, err := p.Interp.EvalString(context.Background(), src)
 		var d *scheme.Denied
 		if !errors.As(err, &d) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,11 +25,15 @@ func fixtureDirs(t *testing.T) (root, data, out string) {
 
 func TestDefaultGrantsEverything(t *testing.T) {
 	_, data, out := fixtureDirs(t)
-	script := `(begin
-	  (fs-write-text "` + out + `/o.txt" (string-upcase (fs-read-text "` + data + `/a.txt")))
-	  (list (read-file "` + out + `/o.txt")
-	        (assoc-ref (proc-run '("echo" "hi")) "stdout")
-	        (sha256 "abc")))`
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(`(begin
+	  (fs-write-text `+scmString(out+"/o.txt")+` (string-upcase (fs-read-text `+scmString(data+"/a.txt")+`)))
+	  (list (read-file `+scmString(out+"/o.txt")+`)
+	        (assoc-ref (proc-run (list %q "-test.run=TestCommandProcess" "--" "brote-echo" "hi")) "stdout")
+	        (sha256 "abc")))`, exe)
 	status, stdout, errs := invoke(t, "", "-e", script)
 	if status != 0 || !strings.HasPrefix(stdout, `("ALPHA" "hi\n" "ba78`) {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, stdout, errs)
@@ -42,8 +47,8 @@ func TestSandboxHasNoMachine(t *testing.T) {
 		t.Fatalf("pure functions should work in the sandbox: %d %q", status, out)
 	}
 	for _, expr := range []string{
-		`(fs-read-text "` + data + `/a.txt")`, `(read-file "` + data + `/a.txt")`, `(proc-run '("echo"))`,
-		`(http-get "http://example.com/")`, `(env-get "HOME")`, `(load "` + data + `/a.txt")`,
+		`(fs-read-text ` + scmString(data+"/a.txt") + `)`, `(read-file ` + scmString(data+"/a.txt") + `)`, `(proc-run '("echo"))`,
+		`(http-get "http://example.com/")`, `(env-get "HOME")`, `(load ` + scmString(data+"/a.txt") + `)`,
 	} {
 		status, out, errs := invoke(t, "", "-sandbox", "-e", expr)
 		if status == 0 || out != "" || errs == "" {
@@ -58,12 +63,12 @@ func TestAllowGrantsOnlyWhatIsNamed(t *testing.T) {
 	run := func(expr string) (int, string, string) {
 		return invoke(t, "", append(append([]string{}, args...), "-e", expr)...)
 	}
-	if status, stdout, errs := run(`(begin (fs-write-text "` + out + `/o" "x") (list (read-file "` + data + `/a.txt") (fs-read-text "` + out + `/o")))`); status != 0 || stdout != "(\"alpha\" \"x\")\n" {
+	if status, stdout, errs := run(`(begin (fs-write-text ` + scmString(out+"/o") + ` "x") (list (read-file ` + scmString(data+"/a.txt") + `) (fs-read-text ` + scmString(out+"/o") + `)))`); status != 0 || stdout != "(\"alpha\" \"x\")\n" {
 		t.Errorf("granted access failed: %d %q %q", status, stdout, errs)
 	}
 	for _, expr := range []string{
-		`(fs-read-text "` + root + `/secret.txt")`, `(fs-read-text "` + data + `/../secret.txt")`, `(fs-write-text "` + data + `/new" "x")`,
-		`(fs-write-text "` + root + `/new" "x")`, `(proc-run '("echo"))`, `(http-get "http://example.com/")`, `(load "` + root + `/outside.scm")`,
+		`(fs-read-text ` + scmString(root+"/secret.txt") + `)`, `(fs-read-text ` + scmString(data+"/../secret.txt") + `)`, `(fs-write-text ` + scmString(data+"/new") + ` "x")`,
+		`(fs-write-text ` + scmString(root+"/new") + ` "x")`, `(proc-run '("echo"))`, `(http-get "http://example.com/")`, `(load ` + scmString(root+"/outside.scm") + `)`,
 	} {
 		if status, stdout, _ := run(expr); status == 0 || stdout != "" {
 			t.Errorf("%s was allowed: %d %q", expr, status, stdout)
@@ -74,7 +79,7 @@ func TestAllowGrantsOnlyWhatIsNamed(t *testing.T) {
 	}
 	// load works inside the grant.
 	writeFile(t, data, "lib.scm", "(define from-lib 7)")
-	if status, stdout, errs := run(`(begin (load "` + data + `/lib.scm") from-lib)`); status != 0 || stdout != "7\n" {
+	if status, stdout, errs := run(`(begin (load ` + scmString(data+"/lib.scm") + `) from-lib)`); status != 0 || stdout != "7\n" {
 		t.Errorf("load inside the grant: %d %q %q", status, stdout, errs)
 	}
 }
@@ -95,11 +100,11 @@ func TestPolicyFile(t *testing.T) {
 	root, _, _ := fixtureDirs(t)
 	pol := writeFile(t, root, "p.policy", `(policy (regexp) (fs (read "data")))`) // data means root/data, the file's own directory
 	// Name the file absolutely: the working directory is not the policy file's, but the grant is.
-	status, out, errs := invoke(t, "", "-policy", pol, "-e", `(list (regexp-matches? "^a" (read-file "`+filepath.Join(root, "data", "a.txt")+`")))`)
+	status, out, errs := invoke(t, "", "-policy", pol, "-e", `(list (regexp-matches? "^a" (read-file `+scmString(filepath.Join(root, "data", "a.txt"))+`)))`)
 	if status != 0 || out != "(#t)\n" {
 		t.Errorf("policy file: %d %q %q", status, out, errs)
 	}
-	if status, _, _ := invoke(t, "", "-policy", pol, "-e", `(read-file "`+filepath.Join(root, "secret.txt")+`")`); status == 0 {
+	if status, _, _ := invoke(t, "", "-policy", pol, "-e", `(read-file `+scmString(filepath.Join(root, "secret.txt"))+`)`); status == 0 {
 		t.Error("the policy file's grant was exceeded")
 	}
 	if status, _, _ := invoke(t, "", "-policy", pol, "-e", `(sha256 "x")`); status == 0 {

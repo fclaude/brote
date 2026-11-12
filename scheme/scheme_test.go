@@ -457,13 +457,13 @@ func TestLoadFile(t *testing.T) {
 	p := filepath.Join(dir, "lib.scm")
 	os.WriteFile(p, []byte(`(define (lib-fn) 'loaded) (register-tool "lib-tool" lib-fn '((doc . "d") (params . ())))`), 0o600)
 	in := New()
-	eval(t, in, `(load "`+p+`")`)
+	eval(t, in, `(load `+Write(Str(p))+`)`)
 	if got := Write(eval(t, in, `(list (lib-fn) (lib-tool))`)); got != "(loaded loaded)" {
 		t.Fatalf("load: %s", got)
 	}
 	bad := filepath.Join(dir, "bad.scm")
 	os.WriteFile(bad, []byte(`(car 1)`), 0o600)
-	if _, err := in.EvalString(context.Background(), `(load "`+bad+`")`); err == nil || !strings.Contains(err.Error(), "bad.scm: car:") {
+	if _, err := in.EvalString(context.Background(), `(load `+Write(Str(bad))+`)`); err == nil || !strings.Contains(err.Error(), "bad.scm: car:") {
 		t.Fatalf("load error should name the file: %v", err)
 	}
 }
@@ -636,10 +636,10 @@ func TestRunawayRecursionIsAnError(t *testing.T) {
 	}
 
 	self := filepath.Join(t.TempDir(), "self.scm")
-	if err := os.WriteFile(self, []byte(`(load "`+self+`")`), 0o600); err != nil {
+	if err := os.WriteFile(self, []byte(`(load `+Write(Str(self))+`)`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := in.EvalString(context.Background(), `(load "`+self+`")`); err == nil || !strings.Contains(err.Error(), "loaded again") {
+	if _, err := in.EvalString(context.Background(), `(load `+Write(Str(self))+`)`); err == nil || !strings.Contains(err.Error(), "loaded again") {
 		t.Fatalf("a file that loads itself: %v", err)
 	}
 	if _, err := Read(strings.Repeat("(", 200_000) + strings.Repeat(")", 200_000)); err == nil || !strings.Contains(err.Error(), "nested more than") {

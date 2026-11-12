@@ -134,17 +134,30 @@ func TestATimeoutCancelsARequestInFlight(t *testing.T) {
 }
 
 func TestSleepAndProgramsStopWithTheirTask(t *testing.T) {
-	p := Allow(Module(Time), ExecCommands("sleep"))
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Allow(Module(Time), ExecCommands(exe))
 	in, _ := taskInterp(t, p)
 	start := time.Now()
 	// The evaluation ends at once; its tasks, one asleep and one running a
 	// program, are cancelled with it rather than waited out.
-	evalTasks(t, in, `
+	evalTasks(t, in, fmt.Sprintf(`
 (spawn (lambda () (time-sleep 9)))
-(spawn (lambda () (proc-run '("sleep" "9"))))
+(spawn (lambda () (proc-run (list %q "-test.run=TestSleepingProcess" "--" "brote-sleep"))))
 (time-sleep 0.2)
-'done`)
+'done`, exe))
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("tasks outlived their evaluation (%v)", d)
 	}
+}
+
+// A real native child with a bounded lifetime, also used on Windows.
+func TestSleepingProcess(t *testing.T) {
+	if os.Args[len(os.Args)-1] != "brote-sleep" {
+		return
+	}
+	time.Sleep(9 * time.Second)
+	os.Exit(0)
 }

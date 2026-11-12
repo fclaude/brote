@@ -149,7 +149,7 @@ func TestRenameSemanticSearch(t *testing.T) {
 	open := "(define (f x) (display (+ x shared)))\n(f 1)\n"
 	openJSON, _ := json.Marshal(open)
 	messages := []string{
-		fmt.Sprintf(`{"id":1,"method":"initialize","params":{"rootUri":"file://%s","initializationOptions":{"hostProfile":{"name":"t","symbols":[]}}}}`, dir),
+		fmt.Sprintf(`{"id":1,"method":"initialize","params":{"rootUri":%q,"initializationOptions":{"hostProfile":{"name":"t","symbols":[]}}}}`, fileURI(dir)),
 		`{"method":"initialized"}`,
 		fmt.Sprintf(`{"method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///a.scm","version":1,"text":%s}}}`, openJSON),
 		// Rename f: the definition and its uses, in every indexed file.
@@ -208,7 +208,7 @@ func TestRenameSemanticSearch(t *testing.T) {
 	foundB := false
 	for _, s := range syms {
 		loc := s.(map[string]any)["location"].(map[string]any)
-		if loc["uri"] == "file://"+bPath && s.(map[string]any)["name"] == "shared" {
+		if loc["uri"] == fileURI(bPath) && s.(map[string]any)["name"] == "shared" {
 			foundB = true
 		}
 	}

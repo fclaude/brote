@@ -1,6 +1,7 @@
 package std
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,16 +11,16 @@ func TestApplySpec(t *testing.T) {
 	p := Allow()
 	for _, spec := range []string{
 		"regexp", "time", "fs.read=data,/etc/hosts", "fs.write=out", "net=api.x.com,*.y.com:443", "net.methods=get,POST",
-		"exec=git,/usr/bin/jq", "exec.env=PATH", "env=HOME", "env.allow=LANG",
+		"exec=git," + nativeCommandPath(), "exec.env=PATH", "env=HOME", "env.allow=LANG",
 	} {
 		if err := p.ApplySpec(spec); err != nil {
 			t.Fatalf("%s: %v", spec, err)
 		}
 	}
-	want := mustParse(t, `(policy (regexp) (time) (env (allow "HOME" "LANG"))
+	want := mustParse(t, fmt.Sprintf(`(policy (regexp) (time) (env (allow "HOME" "LANG"))
 	  (fs (read "data" "/etc/hosts") (write "out"))
 	  (net (allow "api.x.com" "*.y.com:443") (methods get head post))
-	  (exec (allow "git" "/usr/bin/jq") (env (allow "PATH"))))`)
+	  (exec (allow "git" %q) (env (allow "PATH"))))`, nativeCommandPath()))
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got\n%s\nwant\n%s", p.Pretty(), want.Pretty())
 	}

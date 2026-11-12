@@ -2,6 +2,7 @@ package std
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,11 +51,11 @@ func expectErr(t *testing.T, policy string, cases map[string]string) {
 
 func TestPathModule(t *testing.T) {
 	expect(t, `(policy (path))`, map[string]string{
-		`(path-join "a" "b" "../c")`: `"a/c"`,
+		`(path-join "a" "b" "../c")`: scheme.Write(scheme.Str(filepath.Join("a", "c"))),
 		`(path-base "a/b.txt")`:      `"b.txt"`,
 		`(path-dir "a/b.txt")`:       `"a"`,
 		`(path-ext "a/b.tar.gz")`:    `".gz"`,
-		`(path-clean "a//b/./c/..")`: `"a/b"`,
+		`(path-clean "a//b/./c/..")`: scheme.Write(scheme.Str(filepath.Join("a", "b"))),
 	})
 }
 

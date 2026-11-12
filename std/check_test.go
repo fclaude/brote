@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -150,12 +151,16 @@ func TestCheckNetAgreesWithTheInstalledPolicy(t *testing.T) {
 }
 
 func TestCheckExec(t *testing.T) {
-	p := mustParse(t, `(policy (exec (allow "echo" "/bin/ls")))`)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := mustParse(t, fmt.Sprintf(`(policy (exec (allow "go" %q)))`, exe))
 	for name, want := range map[string]string{
-		"echo":    "",
-		"/bin/ls": "",
-		"ls":      "ls is not a command this module may run (allowed commands: /bin/ls, echo)",
-		"rm":      "rm is not a command",
+		exe:  "",
+		"go": "",
+		"ls": "ls is not a command this module may run",
+		"rm": "rm is not a command",
 	} {
 		err := p.CheckExec(name)
 		switch {

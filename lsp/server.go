@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -440,15 +441,28 @@ func (s *Server) allDocuments() map[string]*document {
 // uriKey is what identifies a document's file whatever escaping its URI
 // uses: the cleaned path of a file: URI, or the URI itself.
 func uriKey(uri string) string {
-	if u, err := url.Parse(uri); err == nil && u.Scheme == "file" && u.Path != "" {
-		return "file:" + filepath.Clean(u.Path)
+	if p, ok := uriPath(uri); ok {
+		if runtime.GOOS == "windows" {
+			p = strings.ToLower(p)
+		}
+		return "file:" + filepath.Clean(p)
 	}
 	return uri
 }
 
 // fileURI is the file: URI of an absolute path, escaped as clients send it.
 func fileURI(path string) string {
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	path = filepath.ToSlash(path)
+	if runtime.GOOS == "windows" {
+		if strings.HasPrefix(path, "//") {
+			host, rest, _ := strings.Cut(path[2:], "/")
+			return (&url.URL{Scheme: "file", Host: host, Path: "/" + rest}).String()
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 // readWorkspaceFile reads and analyzes one file of the workspace, or returns
@@ -472,11 +486,10 @@ func (s *Server) indexWorkspace() {
 	if s.root == "" {
 		return
 	}
-	u, err := url.Parse(s.root)
-	if err != nil || u.Scheme != "file" || u.Path == "" {
+	root, ok := uriPath(s.root)
+	if !ok {
 		return
 	}
-	root := filepath.FromSlash(u.Path)
 	_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable entries are skipped, not fatal
@@ -560,4 +573,23 @@ func semanticTokens(d *analysis.Document) []int {
 		prevLine, prevChar = t.rng.Start.Line, t.rng.Start.Character
 	}
 	return data
+}
+
+// uriPath decodes a local file URL into the native filesystem namespace.
+func uriPath(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "file" || u.Path == "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	p := u.Path
+	if runtime.GOOS == "windows" {
+		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+			p = "//" + u.Host + p
+		} else if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:]
+		}
+	} else if u.Host != "" && u.Host != "localhost" {
+		return "", false
+	}
+	return filepath.Clean(filepath.FromSlash(p)), true
 }

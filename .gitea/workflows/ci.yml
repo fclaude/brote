@@ -3,7 +3,7 @@ name: Gitea checks
 # Gitea uses this directory in preference to .github/workflows, whose jobs
 # ask for GitHub's hosted runners (ubuntu-24.04, macos-15): on Gitea they
 # waited for a runner that never came. GitHub alone builds releases and
-# publishes the site; this runs the Linux half of GitHub's CI on the
+# publishes the site; this runs source checks on the
 # instance's Alpine runners. The optional repository variable
 # BROTE_LINUX_RUNNER overrides the runner label.
 on:
@@ -63,4 +63,18 @@ jobs:
           test "$(bin/brote -e '(map (lambda (x) (* x x)) (iota 5))')" = "(0 1 4 9 16)"
 
       - name: Run staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
+  # Packages CI owns acceptance of main. Validate proposed source changes here
+  # without duplicating every published main build.
+  windows:
+    if: github.ref != 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-native
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: builtin:checkout
+      - name: Native Windows vet, race tests and builds
+        run: python .gitea/native-check.py

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,6 +23,10 @@ import (
 //	<!-- run-shell -->      a ```console block of "$ command" lines, each run
 //	                        with the built brote on the PATH, in an empty
 //	                        directory; the lines under a command are its output
+//
+// <!-- run-unix --> marks Scheme output that contains native path separators.
+// Console blocks use POSIX sh and are checked on Unix; native command and path
+// behavior is covered by the Go tests on every platform.
 //
 // Every example on a page runs in the same interpreter, in order, so a page
 // can build on what it defined earlier. DOCS_UPDATE=1 go test ./cmd/brote
@@ -40,7 +45,7 @@ func TestDocExamples(t *testing.T) {
 	// whole test owns, and only when a page has such an example.
 	bin := ""
 	for _, page := range docPages {
-		if src, err := os.ReadFile(filepath.Join(root, page)); err == nil && bytes.Contains(src, []byte("<!-- run-shell -->")) {
+		if src, err := os.ReadFile(filepath.Join(root, page)); err == nil && runtime.GOOS != "windows" && bytes.Contains(src, []byte("<!-- run-shell -->")) {
 			bin = buildBrote(t)
 			break
 		}
@@ -62,12 +67,14 @@ func TestDocExamples(t *testing.T) {
 			if err := registerHost(in, rt, nil); err != nil {
 				t.Fatal(err)
 			}
+			// Git checkouts on Windows may use CRLF; transcripts use logical lines.
+			src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
 			lines := strings.Split(string(src), "\n")
 			var result []string
 			for i := 0; i < len(lines); i++ {
 				result = append(result, lines[i])
 				marker := strings.TrimSpace(lines[i])
-				if marker != "<!-- run -->" && marker != "<!-- run-shell -->" {
+				if marker != "<!-- run -->" && marker != "<!-- run-shell -->" && marker != "<!-- run-unix -->" {
 					continue
 				}
 				// The block that follows.
@@ -92,7 +99,10 @@ func TestDocExamples(t *testing.T) {
 				i = j
 
 				var got string
-				if marker == "<!-- run -->" {
+				if runtime.GOOS == "windows" && marker != "<!-- run -->" {
+					continue
+				}
+				if marker != "<!-- run-shell -->" {
 					out.Reset()
 					repl.Run(context.Background(), in, strings.NewReader(strings.Join(body, "\n")+"\n"), &out, repl.Options{})
 					got = strings.TrimRight(out.String(), "\n")

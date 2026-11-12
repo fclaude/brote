@@ -56,7 +56,9 @@ These work on text and never touch the disk. They use the separator of the platf
 | `(path-ext path)` | the extension with its dot, or `""` |
 | `(path-clean path)` | the path with `.`, `..` and doubled separators resolved |
 
-<!-- run -->
+The following output uses Unix path separators. Windows uses backslashes.
+
+<!-- run-unix -->
 ```lisp
 (path-join "notes" "2024" "../today.txt")
 (path-base "notes/today.txt")

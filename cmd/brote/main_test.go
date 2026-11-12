@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/fclaude/brote/scheme"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func scmString(s string) string { return scheme.Write(scheme.Str(s)) }
 
 // invoke runs the command with the given arguments and standard input.
 func invoke(t *testing.T, stdin string, args ...string) (status int, stdout, stderr string) {
@@ -82,7 +86,7 @@ func TestStandardInputIsAREPL(t *testing.T) {
 func TestLoadReadsAFile(t *testing.T) {
 	dir := t.TempDir()
 	lib := writeFile(t, dir, "lib.scm", `(define (twice x) (* 2 x))`)
-	status, out, errs := invoke(t, "", "-e", `(begin (load "`+lib+`") (twice 4))`)
+	status, out, errs := invoke(t, "", "-e", `(begin (load `+scmString(lib)+`) (twice 4))`)
 	if status != 0 || out != "8\n" {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
 	}
@@ -126,11 +130,11 @@ func TestCommandLineIsWhatFollowsTheDashes(t *testing.T) {
 func TestReadFileGivesTheContentsAndNamesAFileItCannotRead(t *testing.T) {
 	dir := t.TempDir()
 	p := writeFile(t, dir, "in.txt", "line one\nline two\n")
-	status, out, errs := invoke(t, "", "-e", `(read-file "`+p+`")`)
+	status, out, errs := invoke(t, "", "-e", `(read-file `+scmString(p)+`)`)
 	if status != 0 || out != "\"line one\\nline two\\n\"\n" || errs != "" {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
 	}
-	status, _, errs = invoke(t, "", "-e", `(read-file "`+filepath.Join(dir, "missing")+`")`)
+	status, _, errs = invoke(t, "", "-e", `(read-file `+scmString(filepath.Join(dir, "missing"))+`)`)
 	if status != 1 || !strings.Contains(errs, "missing") || strings.Count(errs, "read-file") > 1 {
 		t.Fatalf("status %d, stderr %q", status, errs)
 	}
@@ -161,4 +165,12 @@ func TestTheReplHasNoStandardInputToRead(t *testing.T) {
 	if status != 0 || !strings.Contains(out, `("x")`) || !strings.Contains(out, "#t") || errs != "" {
 		t.Fatalf("status %d, stdout %q, stderr %q", status, out, errs)
 	}
+}
+
+func TestCommandProcess(t *testing.T) {
+	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "brote-echo" {
+		return
+	}
+	fmt.Println(os.Args[len(os.Args)-1])
+	os.Exit(0)
 }

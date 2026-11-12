@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,7 +117,7 @@ func TestEditorHistoryFile(t *testing.T) {
 	if len(got) != 2 || got[0] != "(define x 1)" || got[1] != "(display \"a\nb\")" {
 		t.Fatalf("history = %q", got)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Errorf("history file: %v %v, want mode 0600", info, err)
 	}
 }

@@ -2,6 +2,7 @@ package std
 
 import (
 	"math/rand/v2"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -43,6 +44,12 @@ func TestIntersectCases(t *testing.T) {
 		want := mustParse(t, c.want)
 		if !reflect.DeepEqual(got, want.Resolve("")) {
 			t.Errorf("%s:\n got  %s\n want %s", c.name, got, want.Resolve(""))
+		}
+		for i, reason := range c.refused {
+			if strings.HasPrefix(reason, "fs read /") || strings.HasPrefix(reason, "fs write /") {
+				at := strings.LastIndex(reason, " ")
+				c.refused[i] = reason[:at+1] + mustAbs(t, reason[at+1:])
+			}
 		}
 		if !reflect.DeepEqual(refused, c.refused) {
 			t.Errorf("%s: refused %q, want %q", c.name, refused, c.refused)
@@ -149,11 +156,11 @@ func TestIntersectResolvesRelativePaths(t *testing.T) {
 	h := mustParse(t, `(policy (fs (read "data")))`).Resolve("/base")
 	r := mustParse(t, `(policy (fs (read "data/sub")))`).Resolve("/base")
 	got, refused := h.Intersect(r)
-	if len(refused) != 0 || !reflect.DeepEqual(got.FS.Read, []string{"/base/data/sub"}) {
+	if len(refused) != 0 || !reflect.DeepEqual(got.FS.Read, []string{mustAbs(t, filepath.Join("/base", "data", "sub"))}) {
 		t.Errorf("got %v, %v", got.FS.Read, refused)
 	}
 	r = mustParse(t, `(policy (fs (read "data/../../etc")))`).Resolve("/base")
-	if got, refused := h.Intersect(r); got.Has(FS) || !strings.Contains(strings.Join(refused, ";"), "fs read /etc") {
+	if got, refused := h.Intersect(r); got.Has(FS) || !strings.Contains(strings.Join(refused, ";"), "fs read "+mustAbs(t, "/etc")) {
 		t.Errorf(".. must not widen: %v, %v", got.FS.Read, refused)
 	}
 }

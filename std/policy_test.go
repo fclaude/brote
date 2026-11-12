@@ -2,6 +2,8 @@ package std
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,14 +11,14 @@ import (
 	"github.com/fclaude/brote/scheme"
 )
 
-const sample = `(policy
+var sample = fmt.Sprintf(`(policy
   (profile safe)
   (env (allow "HOME" "LANG"))
   (fs (read "data") (write "out") (max-file 4MB))
   (net (allow "api.example.com" "*.github.com:443") (methods get post)
        (max-body 1MB) (timeout 10s))
-  (exec (allow "git" "/usr/bin/jq") (timeout 30s) (max-output 1MB) (env (allow "PATH")))
-  (time (max-sleep 2s)))`
+  (exec (allow "git" %q) (timeout 30s) (max-output 1MB) (env (allow "PATH")))
+  (time (max-sleep 2s)))`, nativeCommandPath())
 
 func mustParse(t testing.TB, src string) *Policy {
 	t.Helper()
@@ -112,7 +114,7 @@ func TestUngrantedIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	if v, err := eval(t, in, `(path-join "a" "b")`); err != nil || v.S != "a/b" {
+	if v, err := eval(t, in, `(path-join "a" "b")`); err != nil || v.S != filepath.Join("a", "b") {
 		t.Fatalf("path-join = %v, %v", v, err)
 	}
 	for _, name := range []string{"fs-read-text", "http-request", "proc-run", "env-get", "time-now"} {
@@ -181,7 +183,7 @@ func TestModuleInfoIsPolicySyntax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := scheme.Write(v), `((read "/data") (max-file 1048576))`; got != want {
+	if got, want := scheme.Write(v), "((read "+scheme.Write(scheme.Str(mustAbs(t, "/data")))+") (max-file 1048576))"; got != want {
 		t.Errorf("module-info = %s, want %s", got, want)
 	}
 }
