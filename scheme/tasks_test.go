@@ -106,9 +106,9 @@ func TestSpawnAndWait(t *testing.T) {
 	if got := scheme.Write(e.ok(t, `(task-wait-all (map (lambda (n) (spawn (lambda () (* n n)))) '(1 2 3 4)))`)); got != "(1 4 9 16)" {
 		t.Errorf("got %s", got)
 	}
-	// (the task may start before define has bound t, so it waits for it)
-	if got := scheme.Write(e.ok(t, `(define t (spawn (lambda () (let loop () (if (task? t) (eq? (current-task) t) (loop))))))
-(task-wait t)`)); got != "#t" {
+	// Compare in the parent so the child can start before spawn returns.
+	if got := scheme.Write(e.ok(t, `(let ((t (spawn (lambda () (current-task)))))
+  (eq? (task-wait t) t))`)); got != "#t" {
 		t.Errorf("a task's current-task is not the handle spawn returned: %s", got)
 	}
 }

@@ -1,6 +1,7 @@
 package scheme
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -175,6 +176,21 @@ func TestTidyArgsUnwrapsJSONStrings(t *testing.T) {
 	for _, raw := range []string{`{"cmd":"bash","args":"-c"}`, `{"cmd":"bash","args":"{\"k\":1}"}`} {
 		if _, err := p.ArgsFromJSON([]byte(raw)); err == nil {
 			t.Errorf("%s is accepted", raw)
+		}
+	}
+}
+
+func TestToJSONFlatStrings(t *testing.T) {
+	for _, v := range []Value{
+		List(Str("quote\""), Str("a\nb"), Str("<>&"), Str("\xff")),
+		List(Str("a"), Int(42)),
+		Cons(Str("a"), Str("improper")),
+	} {
+		var want bytes.Buffer
+		wantErr := jsonEncode(&want, v, 0)
+		got, err := ToJSON(v)
+		if (err != nil) != (wantErr != nil) || (err == nil && string(got) != want.String()) {
+			t.Fatalf("ToJSON = %q, %v; generic encoder = %q, %v", got, err, want.String(), wantErr)
 		}
 	}
 }

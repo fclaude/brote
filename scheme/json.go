@@ -25,6 +25,24 @@ func FromJSON(raw []byte) (Value, error) {
 
 // ToJSON renders a value with the json-emit mapping.
 func ToJSON(v Value) ([]byte, error) {
+	// A proper list of strings is always a JSON array. Marshal it in one
+	// call, using the same escaping as the generic encoder.
+	if v.Kind == KPair && v.P.Car.Kind == KString {
+		tail := v
+		n := 0
+		for tail.Kind == KPair && tail.P.Car.Kind == KString {
+			n++
+			tail = tail.P.Cdr
+		}
+		if tail.Kind == KNil {
+			items := make([]string, n)
+			for i := range items {
+				items[i] = v.P.Car.S
+				v = v.P.Cdr
+			}
+			return json.Marshal(items)
+		}
+	}
 	var buf bytes.Buffer
 	if err := jsonEncode(&buf, v, 0); err != nil {
 		return nil, err

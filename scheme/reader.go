@@ -250,8 +250,8 @@ func (r *reader) abbrev(name string, pos *Pos) (Value, error) {
 func (r *reader) pos0() *Pos { return &Pos{Source: r.file, Line: r.line, Col: r.col} }
 
 func (r *reader) list() (Value, error) {
-	var items []Value
-	tail := Nil
+	head := Nil
+	var last *Pair
 	for {
 		r.skipSpace()
 		if r.eof() {
@@ -267,14 +267,14 @@ func (r *reader) list() (Value, error) {
 			save := *r
 			r.next()
 			if isDelimiter(r.peek()) {
-				if len(items) == 0 {
+				if last == nil {
 					return Value{}, r.errf("dot without a preceding element")
 				}
 				t, err := r.datum()
 				if err != nil {
 					return Value{}, err
 				}
-				tail = t
+				last.Cdr = t
 				r.skipSpace()
 				if r.eof() {
 					return Value{}, ErrIncomplete
@@ -291,13 +291,15 @@ func (r *reader) list() (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		items = append(items, v)
+		cell := Cons(v, Nil)
+		if last == nil {
+			head = cell
+		} else {
+			last.Cdr = cell
+		}
+		last = cell.P
 	}
-	out := tail
-	for i := len(items) - 1; i >= 0; i-- {
-		out = Cons(items[i], out)
-	}
-	return out, nil
+	return head, nil
 }
 
 // rawString reads a """ … """ block: no escapes, so the text between the
@@ -454,6 +456,10 @@ func (r *reader) atom() (Value, error) {
 	}
 	if strings.HasPrefix(tok, "#") {
 		return Value{}, r.errf("unknown # syntax %q", tok)
+	}
+	// Only a digit, sign or decimal point can begin a supported number.
+	if c := tok[0]; (c < '0' || c > '9') && c != '+' && c != '-' && c != '.' {
+		return Sym(tok), nil
 	}
 	if n, err := strconv.ParseInt(tok, 10, 64); err == nil {
 		return Int(n), nil
