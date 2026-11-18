@@ -31,7 +31,7 @@ What is not safe to do while an evaluation runs is change what the interpreter *
 
 `Vector.Items` is no longer exported. `Len`, `At`, `SetAt` and `Elements` take the vector's lock.
 
-Separate interpreters share nothing. There is no package-level state, so a host may run any number of them, each in its own goroutine.
+The first `scheme.New` prepares the embedded prelude declarations once per process. Each call installs fresh bindings in its own global environment, including private closure bodies, mutable literals and macro expansion state. A host can create an interpreter per request and run them concurrently.
 
 Programs outlive evaluations. Definitions stay in the global environment (`in.Global()`), and a closure value keeps its environment. A host can look one up (`in.Global().Lookup("on-save")`), keep the `Value`, and `Apply` it later with arguments it builds. `Global().Snapshot()` and `Restore` copy the bindings and put them back.
 
@@ -442,7 +442,7 @@ Nodwyn's imports, so it waits for a minor version.
 | Denial and cancellation pass `guard` | `TestGuardCannotCatchDenialOrCancellation` |
 | A halt passes `guard` | `TestHaltPassesThroughGuard` (`scheme/embed_test.go`) |
 | Cancellation needs no primitive; the interpreter survives it | `TestCancellationNeedsNoPrimitive`, `TestInterpSurvivesCancellation` |
-| Interpreters are independent | `TestInterpsAreIndependent` (run with `-race`) |
+| Interpreters are independent | `TestInterpsAreIndependent`, `TestPreludeTemplatesArePrivate` (run with `-race`) |
 | A handler may call back into Scheme | `TestHandlerCallsBackIntoScheme` |
 | Handler errors reach the program and the host | `TestHandlerErrorsReachProgramAndHost` |
 | Registration ends at `Freeze` | `TestFreezeEndsRegistration` |

@@ -2,20 +2,14 @@ package scheme
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 )
-
-//go:embed all:prelude
-var preludeFS embed.FS
 
 // specialForms is the fixed set of reserved names: every one is parsed as
 // a special form wherever it heads a list, whatever the environment binds.
@@ -166,12 +160,9 @@ func New(opts ...Option) *Interp {
 		global: NewEnv(nil),
 		prims:  make(map[string]*Prim),
 		out:    io.Discard,
-		isSF:   make(map[string]bool, len(specialForms)),
+		isSF:   specialFormNames(),
 
 		gateSem: make(chan struct{}, 1),
-	}
-	for _, s := range specialForms {
-		in.isSF[s] = true
 	}
 	for _, o := range opts {
 		o(in)
@@ -193,28 +184,12 @@ func New(opts ...Option) *Interp {
 	return in
 }
 
-func (in *Interp) loadPrelude() error {
-	entries, err := fs.ReadDir(preludeFS, "prelude")
-	if err != nil {
-		return err
+func specialFormNames() map[string]bool {
+	names := make(map[string]bool, len(specialForms))
+	for _, s := range specialForms {
+		names[s] = true
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".scm") {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		src, err := preludeFS.ReadFile("prelude/" + n)
-		if err != nil {
-			return err
-		}
-		if _, err := in.EvalLibrary(context.Background(), "prelude/"+n, string(src)); err != nil {
-			return fmt.Errorf("%s: %w", n, err)
-		}
-	}
-	return nil
+	return names
 }
 
 // Global returns the global environment.
