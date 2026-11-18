@@ -12,8 +12,8 @@ import (
 //go:embed all:prelude
 var preludeFS embed.FS
 
-// The embedded declarations are read and evaluated once. Nothing in this
-// private image is ever given to Scheme code or to an embedding application.
+// The embedded declarations are read and evaluated once. This image stays
+// private. Clients only receive interpreter-owned copies of its bindings.
 var embeddedPrelude = sync.OnceValues(func() ([]preludeFile, error) {
 	names, err := fs.Glob(preludeFS, "prelude/*.scm")
 	if err != nil {
@@ -36,7 +36,7 @@ var embeddedPrelude = sync.OnceValues(func() ([]preludeFile, error) {
 
 type preludeFile struct {
 	source      Source
-	bindings    map[string]Value
+	bindings    map[string]*preludeBinding
 	initializer string
 }
 
@@ -61,7 +61,11 @@ func preparePreludeFile(name, src string) (preludeFile, error) {
 			return f, err
 		}
 	}
-	f.bindings = compiler.global.Snapshot()
+	values := compiler.global.Snapshot()
+	f.bindings = make(map[string]*preludeBinding, len(values))
+	for name, value := range values {
+		f.bindings[name] = &preludeBinding{source: f.source, value: value}
+	}
 	return f, nil
 }
 
@@ -103,35 +107,47 @@ func (f *preludeFile) install(in *Interp) error {
 		_, err := in.EvalLibrary(context.Background(), f.source.Name, f.initializer)
 		return err
 	}
-	local := preludeCopy{source: f.source}
-	for name, v := range f.bindings {
-		switch {
-		case v.Kind == KProc:
-			proto := v.Proc
-			c := &Closure{Name: proto.Name, Rest: proto.Rest, Params: slices.Clone(proto.Params),
-				Doc: proto.Doc, Body: local.values(proto.Body), Env: in.global}
-			c.names = frameNames(c)
-			if n := proto.named.Load(); n != nil {
-				c.nameIfAnonymous(*n)
-			}
-			v.Proc = c
-		case macroOf(v) != nil:
-			m := *macroOf(v)
-			// The private pattern-variable and binder maps are read-only after
-			// parsing. Each interpreter gets its own pattern and template pairs.
-			m.rules = slices.Clone(m.rules)
-			for i := range m.rules {
-				r := &m.rules[i]
-				r.pattern = local.datum(r.pattern)
-				r.template = local.datum(r.template)
-			}
-			v = ObjectValue(&m)
-		default:
-			v = local.datum(v)
-		}
-		in.global.Define(name, v)
+	for name, binding := range f.bindings {
+		in.global.global.Store(name, binding)
 	}
 	return nil
+}
+
+// A root binding initially names this private, immutable template. The first
+// reader publishes an interpreter-owned copy before returning it to the caller.
+type preludeBinding struct {
+	source Source
+	value  Value
+}
+
+func (b *preludeBinding) instantiate(env *Env) Value {
+	local := preludeCopy{source: b.source}
+	v := b.value
+	switch {
+	case v.Kind == KProc:
+		proto := v.Proc
+		c := &Closure{Name: proto.Name, Rest: proto.Rest, Params: slices.Clone(proto.Params),
+			Doc: proto.Doc, Body: local.values(proto.Body), Env: env}
+		c.names = frameNames(c)
+		if n := proto.named.Load(); n != nil {
+			c.nameIfAnonymous(*n)
+		}
+		v.Proc = c
+	case macroOf(v) != nil:
+		m := *macroOf(v)
+		// The private pattern-variable and binder maps are read-only after
+		// parsing. Each interpreter gets its own pattern and template pairs.
+		m.rules = slices.Clone(m.rules)
+		for i := range m.rules {
+			r := &m.rules[i]
+			r.pattern = local.datum(r.pattern)
+			r.template = local.datum(r.template)
+		}
+		v = ObjectValue(&m)
+	default:
+		v = local.datum(v)
+	}
+	return v
 }
 
 type preludeCopy struct {
@@ -154,7 +170,7 @@ func (c *preludeCopy) datum(v Value) Value {
 	tail := &out
 	for v.Kind == KPair {
 		if len(c.cells) == 0 {
-			c.cells = make([]Pair, 64)
+			c.cells = make([]Pair, 16)
 		}
 		p := &c.cells[0]
 		c.cells = c.cells[1:]

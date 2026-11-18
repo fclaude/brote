@@ -3,6 +3,8 @@ package scheme
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 	"testing"
 )
 
@@ -62,6 +64,45 @@ func TestPreludeRunsInitializersInTheirOwnEnvironment(t *testing.T) {
 		if Write(got) != fmt.Sprintf("(%d)", i) {
 			t.Fatalf("got %s", Write(got))
 		}
+	}
+}
+
+func TestLazyPreludeBindings(t *testing.T) {
+	in := New()
+	env := in.Global()
+	if !slices.Contains(in.Names(), "identity") {
+		t.Fatal("missing prelude name")
+	}
+	raw, _ := env.global.Load("identity")
+	if _, ok := raw.(*preludeBinding); !ok {
+		t.Fatal("startup eagerly copied identity")
+	}
+	// Lookup can race in several evaluations. They must all observe one closure.
+	var group sync.WaitGroup
+	start := make(chan struct{})
+	results := make([]Value, 32)
+	for i := range results {
+		group.Go(func() { <-start; results[i], _ = env.Lookup("identity") })
+	}
+	close(start)
+	group.Wait()
+	for _, v := range results {
+		if v.Kind != KProc || v.Proc != results[0].Proc || v.Proc.Env != env {
+			t.Fatal("first lookups returned different closures or environments")
+		}
+	}
+	if !env.Set("first", Int(9)) {
+		t.Fatal("could not set an unresolved binding")
+	}
+	env.Define("last", Int(10))
+	snapshot := env.Snapshot()
+	if snapshot["first"].I != 9 || snapshot["last"].I != 10 || snapshot["identity"].Proc != results[0].Proc || snapshot["compose"].Kind != KProc {
+		t.Fatal("snapshot lost a replacement or closure")
+	}
+	delete(snapshot, "compose")
+	env.Restore(snapshot)
+	if _, ok := env.Lookup("compose"); ok {
+		t.Fatal("restore resurrected a removed template")
 	}
 }
 

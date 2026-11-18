@@ -31,7 +31,7 @@ What is not safe to do while an evaluation runs is change what the interpreter *
 
 `Vector.Items` is no longer exported. `Len`, `At`, `SetAt` and `Elements` take the vector's lock.
 
-The first `scheme.New` prepares the embedded prelude declarations once per process. Each call installs fresh bindings in its own global environment, including private closure bodies, mutable literals and macro expansion state. A host can create an interpreter per request and run them concurrently.
+The first `scheme.New` prepares the embedded prelude declarations once per process. Each interpreter has its own global bindings. On first lookup it materializes a private copy of the requested prelude procedure, macro or literal. Defining a replacement before its first lookup skips that copy. A global snapshot resolves every binding it returns. A host can create an interpreter per request and run them concurrently.
 
 Programs outlive evaluations. Definitions stay in the global environment (`in.Global()`), and a closure value keeps its environment. A host can look one up (`in.Global().Lookup("on-save")`), keep the `Value`, and `Apply` it later with arguments it builds. `Global().Snapshot()` and `Restore` copy the bindings and put them back.
 

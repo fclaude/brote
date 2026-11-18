@@ -44,9 +44,11 @@ func SpecialForms() []string { return append([]string(nil), specialForms...) }
 // the global environment, the primitives and the special forms, sorted.
 func (in *Interp) Names() []string {
 	seen := map[string]bool{}
-	for n := range in.global.Snapshot() {
-		seen[n] = true
-	}
+	// Listing names does not require instantiating prelude values.
+	in.global.global.Range(func(name, _ any) bool {
+		seen[name.(string)] = true
+		return true
+	})
 	for _, p := range in.Prims() {
 		seen[p.Name] = true
 	}

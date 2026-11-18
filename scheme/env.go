@@ -19,7 +19,7 @@ import (
 // something new.
 type Env struct {
 	parent *Env
-	global *sync.Map // the root frame's bindings; nil on every other frame
+	global *sync.Map // root names to Value or *preludeBinding; nil on other frames
 
 	mu    sync.RWMutex
 	names []string
@@ -79,10 +79,7 @@ func (e *Env) reindex() {
 func (e *Env) Lookup(name string) (Value, bool) {
 	for env := e; env != nil; env = env.parent {
 		if env.global != nil {
-			if v, ok := env.global.Load(name); ok {
-				return v.(Value), true
-			}
-			continue
+			return env.lookupGlobal(name)
 		}
 		env.mu.RLock()
 		if i := env.find(name); i >= 0 {
@@ -93,6 +90,26 @@ func (e *Env) Lookup(name string) (Value, bool) {
 		env.mu.RUnlock()
 	}
 	return Value{}, false
+}
+
+// A concurrent first lookup can build a second copy, but only the winner is
+// visible. A concurrent Define, Set or Restore takes precedence over an old
+// template just as it does over an ordinary binding.
+func (e *Env) lookupGlobal(name string) (Value, bool) {
+	for {
+		raw, ok := e.global.Load(name)
+		if !ok {
+			return Value{}, false
+		}
+		if v, ok := raw.(Value); ok {
+			return v, true
+		}
+		binding := raw.(*preludeBinding)
+		v := binding.instantiate(e)
+		if e.global.CompareAndSwap(name, binding, v) {
+			return v, true
+		}
+	}
 }
 
 // Define binds name in this frame, shadowing any ancestor binding.
@@ -146,8 +163,13 @@ func (e *Env) Set(name string, v Value) bool {
 func (e *Env) Snapshot() map[string]Value {
 	if e.global != nil {
 		m := make(map[string]Value)
-		e.global.Range(func(k, v any) bool {
-			m[k.(string)] = v.(Value)
+		e.global.Range(func(k, raw any) bool {
+			name := k.(string)
+			if v, ok := raw.(Value); ok {
+				m[name] = v
+			} else if v, ok := e.lookupGlobal(name); ok {
+				m[name] = v
+			}
 			return true
 		})
 		return m
