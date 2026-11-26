@@ -58,6 +58,21 @@ func TestErrorDoesNotEndTheSession(t *testing.T) {
 	}
 }
 
+// Describe leaves out the position of a one-line form that failed in what was
+// just typed, but not of one that failed on the first line of another file,
+// such as one the form imported.
+func TestDescribeNamesAFileButNotTheTypedLine(t *testing.T) {
+	in := scheme.New()
+	_, err := in.EvalNamed(context.Background(), "<expr>", `(car 5)`)
+	if got := repl.Describe(err); strings.Contains(got, "<expr>") || !strings.Contains(got, "car") {
+		t.Errorf("typed: %q", got)
+	}
+	_, err = in.EvalNamed(context.Background(), "lib.scm", `(car 5)`)
+	if got := repl.Describe(err); !strings.Contains(got, "lib.scm:1:1") {
+		t.Errorf("a file: %q", got)
+	}
+}
+
 // A Halt is the host's stop, not an error to report: the session ends with
 // it, and neither the rest of its line nor later lines are evaluated.
 func TestAHaltEndsTheSession(t *testing.T) {

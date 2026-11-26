@@ -30,14 +30,14 @@ rt, err := std.Install(in, pol, std.WithBaseDir(dir), std.WithAudit(logEvent))
 if err != nil { /* discard in */ }
 defer rt.Close()
 
-in.SetGate(rt.Gate(nil)) // keeps the core builtin load inside the fs grant
+in.SetGate(rt.Gate(nil)) // keeps the core's load and import inside the fs grant
 in.Freeze()              // no more registration; register-tool stops working
 v, err := in.EvalString(ctx, untrustedSource)
 ```
 
 `Install` registers the procedures of the granted modules plus `require`, `modules` and `module-info`. Call it once per interpreter and before `Freeze`. Pass the same directory to `scheme.WithBaseDir` and `std.WithBaseDir`: it is what relative paths in the policy and in the script mean.
 
-`Gate` is not optional for code you do not trust. Brote's core has one builtin that reads the disk, `load`, and `std` cannot remove it. `rt.Gate(next)` returns a gate that lets `load` read only what `fs-read-text` could (nothing, when `fs` is not granted) and hands every other call to `next`, which may be `nil` or your own gate. Everything the library does also carries the metadata a gate reads (`Host`, `Egress`, `Irreversible`, parameter roles) and the provenance taints `external:file`, `external:http`, `external:shell` and `external:env`, so a gate you already have keeps working.
+`Gate` is not optional for code you do not trust. Brote's core has two ways to read the disk, the builtin `load` and the special form `import`, and `std` cannot remove them. `rt.Gate(next)` returns a gate that lets them read only what `fs-read-text` could (nothing, when `fs` is not granted) and hands every other call to `next`, which may be `nil` or your own gate. Everything the library does also carries the metadata a gate reads (`Host`, `Egress`, `Irreversible`, parameter roles) and the provenance taints `external:file`, `external:http`, `external:shell` and `external:env`, so a gate you already have keeps working.
 
 `std.WithAudit` calls a function for each file written, removed, renamed or created, each HTTP request and each program run, with the error if it failed. It runs whether or not there is a gate.
 
@@ -170,7 +170,7 @@ $ brote -deny exec -deny net -e '(sha256 "")'
 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
-When any of these options is given, `load` is confined to the `fs` grant, as `rt.Gate` does for an embedder. A script file named on the command line is read by the command itself, whatever the policy says: you chose it.
+When any of these options is given, `load` and `import` are confined to the `fs` grant, as `rt.Gate` does for an embedder. A script file named on the command line is read by the command itself, whatever the policy says: you chose it.
 
 ## What is tested
 
@@ -185,7 +185,7 @@ Each statement above has a test in `std/` or `cmd/brote/`:
 | Private addresses need their own grant, redirects are checked | `TestHTTPPrivateAddressesNeedTheirOwnGrant`, `TestHTTPRedirects`, `TestPrivateAddr` |
 | A per-caller network check holds at every redirect hop and connection, and cannot widen | `TestANetCheckRefusesARedirectOutsideTheCallersGrant`, `TestANetCheckJudgesTheAddressANameResolvesToForEachCaller`, `TestANetCheckJudgesTheMethodOfEachHop`, `TestANetCheckCannotWidenTheInstalledPolicy`, `TestANetCheckIsAskedAtEveryStepWithTheCallersContext` |
 | Arguments are never run by a shell; only granted programs start | `TestExecRunsGrantedCommandsWithoutAShell`, `TestExecRefusesWhatIsNotGranted` |
-| `load` stays inside the grant | `TestPluginLoadStaysInsideTheGrant`, `TestPluginLoadCannotFollowASymlinkOut` |
+| `load` and `import` stay inside the grant | `TestPluginLoadStaysInsideTheGrant`, `TestPluginImportStaysInsideTheGrant`, `TestPluginLoadCannotFollowASymlinkOut` |
 | A plugin gets the intersection and nothing else | `TestPluginGetsOnlyWhatItAskedAndTheHostHas`, `TestPluginExcess` |
 | The command's options | `cmd/brote/policy_test.go` |
 | Every procedure is documented in [std.md](std.md) | `TestStdDocCoverage` |

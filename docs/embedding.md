@@ -358,16 +358,20 @@ While a check is installed, a request's connections serve that request alone (no
 
 `in.LoadFile(ctx, path)` evaluates a file in the global environment, with a
 relative path resolved against `WithBaseDir`, and refuses a file that loads
-itself. The builtin `(load path)` does the same for a program. The
+itself. The builtin `(load path)` does the same for a program, and the
+special form `(import path)` evaluates a file once, in an environment of its
+own, and defines what it exports ([modules](scheme.md#modules)). The
 interpreter evaluates whatever it is handed; **which files to load is the
 host's decision.** Do not load a file only because it is in a directory the
 user opened.
 
-`load` is the one builtin that touches the operating system. It is declared
-`Host` and `Hidden`; with no gate a program can load any file the process can
-read. A host that does not want that installs a gate (below).
+`load` and `import` are the only parts of the language that touch the
+operating system. `load` is declared `Host` and `Hidden`, and `import` shows
+the gate a builtin `Host` primitive named `import` with the path it resolved
+as its `source` argument; with no gate a program can load or import any file
+the process can read. A host that does not want that installs a gate (below).
 
-Package `std` has the batteries (files, HTTP, programs, the environment, the clock, regular expressions, encodings), a policy that chooses which a program gets and how much of each, and `Runtime.Gate`, a gate that holds `load` to the files the program may read. Read [capabilities](capabilities.md) before you run code you did not write.
+Package `std` has the batteries (files, HTTP, programs, the environment, the clock, regular expressions, encodings), a policy that chooses which a program gets and how much of each, and `Runtime.Gate`, a gate that holds `load` and `import` to the files the program may read. Read [capabilities](capabilities.md) before you run code you did not write.
 
 ## Gates and origin
 

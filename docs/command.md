@@ -210,4 +210,4 @@ $ brote -deny net -deny exec -e '(string-length (read-file "in.txt"))'
 6
 ```
 
-When one of these options is given, `load` is also held to the files the script may read. A file named on the command line is always run: you chose it.
+When one of these options is given, `load` and `import` are also held to the files the script may read. A file named on the command line is always run: you chose it.

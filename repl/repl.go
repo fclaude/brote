@@ -203,12 +203,18 @@ func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Opt
 
 // Describe is err as the loop writes it, and as the command writes the error
 // of -e. A one-line form that failed in itself needs no position (it is the
-// line just typed); one that failed inside a procedure, or on a later line,
-// says where.
+// line just typed); one that failed inside a procedure, on a later line, or in
+// a file it loaded or imported, says where.
 func Describe(err error) string {
 	var se *scheme.Error
-	if errors.As(err, &se) && se.Pos != nil && se.Pos.Line == 1 && len(se.Trace) == 0 {
+	if errors.As(err, &se) && se.Pos != nil && se.Pos.Line == 1 && len(se.Trace) == 0 && typed(se.Pos.File()) {
 		return err.Error()
 	}
 	return scheme.FormatError(err)
+}
+
+// typed reports whether text of this name is what a person just typed: the
+// REPL's line, the command's -e expression, or text with no name at all.
+func typed(file string) bool {
+	return file == "" || (strings.HasPrefix(file, "<") && strings.HasSuffix(file, ">"))
 }

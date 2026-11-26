@@ -7,10 +7,11 @@ import (
 	"github.com/fclaude/brote/scheme"
 )
 
-// Gate returns a scheme.Gate that closes the one door std cannot: the core
-// builtin load, which reads any file the process can. Under this gate load
-// reads only what fs-read-text could, and not at all when the fs module is not
-// granted. Everything else goes to next, which may be nil. Install it on an
+// Gate returns a scheme.Gate that closes the doors std cannot: the core
+// builtin load and the special form import, which read any file the process
+// can. Under this gate they read only what fs-read-text could, and not at all
+// when the fs module is not granted. Everything else goes to next, which may
+// be nil. Install it on an
 // interpreter that runs code you do not trust:
 //
 //	in.SetGate(rt.Gate(nil))
@@ -22,8 +23,8 @@ type loadGate struct {
 }
 
 func (g *loadGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Value) error {
-	if p.Name == "load" && p.Meta.Origin == "builtin" {
-		if err := g.checkLoad(args); err != nil {
+	if (p.Name == "load" || p.Name == "import") && p.Meta.Origin == "builtin" {
+		if err := g.checkLoad(p.Name, args); err != nil {
 			return &scheme.Denied{Prim: p.Name, Reason: err.Error()}
 		}
 	}
@@ -35,10 +36,11 @@ func (g *loadGate) Before(ctx context.Context, p *scheme.Prim, args []scheme.Val
 
 // checkLoad allows a path only if the fs grant lets the script read it, with
 // the operating system's own containment check (a symbolic link out of the
-// tree fails here, as it does for fs-read-text).
-func (g *loadGate) checkLoad(args []scheme.Value) error {
+// tree fails here, as it does for fs-read-text). import's path is already
+// resolved against the importing file, so it is the file that will be read.
+func (g *loadGate) checkLoad(name string, args []scheme.Value) error {
 	if g.rt.fs == nil {
-		return errors.New("load is not available: the fs module is not granted")
+		return errors.New(name + " is not available: the fs module is not granted")
 	}
 	if len(args) == 0 || args[0].Kind != scheme.KString {
 		return nil // the arity and type errors are load's own

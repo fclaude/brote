@@ -4,8 +4,9 @@ Brote is a small Scheme for embedding in a Go program. A program written in it
 decides *what to do*; every effect (reading a file, running a command, calling
 a service) is a Go **primitive** that the host registers, and every primitive
 application passes through one optional **gate** the host installs. Scheme
-code never touches the network or the filesystem on its own; the one builtin
-that reads a file, `load`, is a primitive like the rest and the gate sees it.
+code never touches the network or the filesystem on its own; the two things
+that read a file, `load` and `import`, show the gate the file they read, as
+any primitive shows its arguments.
 
 This document is the contract for the language. The interpreter implements
 what is written here and nothing else; the conformance suite has a snippet for
@@ -124,7 +125,8 @@ already does.
   deeper, `equal?` treats values nested deeper as equal only when they are the
   same object, and the printer writes `...` past that depth, so a vector that
   holds itself (`vector-set!`) prints, compares and emits without end. `load`
-  refuses a file that is already being loaded. Without these bounds a runaway
+  refuses a file that is already being loaded, and `import` a file that
+  imports itself. Without these bounds a runaway
   recursion overflowed Go's stack, which ends the whole process.
 
 ### Special forms
@@ -155,10 +157,60 @@ already does.
 | `(cond (test body …) … [(test => proc)] [(else body …)])` | first true clause wins; `=>` passes the test value to `proc`; no clause → void |
 | `(and e …)` | short-circuit; `(and)` is `#t` |
 | `(or e …)` | short-circuit; `(or)` is `#f` |
+| `(import "file.scm" [name …] [(prefix p)])` | evaluate a file once and define here the names it exports (see Modules below) |
+| `(export name …)` | at the top level of an imported file: what `import` gives the file that imports it |
 
 `define` inside a `lambda` body binds in that call's environment (internal
 definitions). When `define` names a fresh anonymous closure, the closure takes
 that name for printing and error messages.
+
+### Modules
+
+`load` evaluates a file in the global environment, so everything it defines,
+helpers too, lands among the program's own names. `import` keeps a file to
+itself:
+
+```lisp
+;; lib/strings.scm
+(export shout)
+(define (helper s) (string-append s "!"))
+(define (shout s) (helper (string-upcase s)))
+
+;; main.scm
+(import "lib/strings.scm")
+(shout "hi")           ; "HI!"
+helper                 ; error: unbound variable
+```
+
+- The file is evaluated **once per interpreter**, in an environment of its own
+  under the global one: it sees the builtins and the program's global names,
+  and what it defines stays in it. Every later `import` of the same file (by
+  its absolute path), from any file, gets that same module without evaluating
+  it again. A file whose evaluation fails is not kept, so the next `import`
+  tries again.
+- `(export name …)` at the file's top level lists what it gives; a file with
+  no `export` gives every name it defines, and names it imported itself.
+  Exporting a name the file does not define is an error, and so is `export`
+  anywhere but the top level of a file being imported.
+- `(import file)` defines every exported name where the `import` is evaluated
+  (at the top level of a program, in the global environment; in a body, in
+  that body). `(import file name …)` takes only the names given, and a name
+  the file does not export is an error. `(prefix p)` puts `p` before each:
+  `(import "lib/math.scm" (prefix m:))` gives `m:square`.
+- What is defined is the value when the import ran. A procedure keeps
+  using the module's own names, but a later `set!` inside the module is not
+  seen by the importer.
+- A relative path is taken against the directory of the file the `import` is
+  in (whether that file was run, loaded or imported), and otherwise against
+  the interpreter's base directory (`scheme.WithBaseDir`). A file that
+  imports itself, directly or through others, is an error that shows the chain.
+- A macro can be exported like any name, but its template's free names mean
+  what they mean where the macro is *used* (see Macros), so a template should
+  refer only to names the importer has: exported ones and builtins.
+- Reading the file goes through the gate as a builtin host primitive called
+  `import` with one `source` argument, the path it resolved, so a gate that
+  holds `load` to some files can hold `import` to the same ones
+  (`std`'s `Runtime.Gate` does).
 
 ### Macros
 

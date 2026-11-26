@@ -171,6 +171,49 @@ func TestPluginLoadStaysInsideTheGrant(t *testing.T) {
 	}
 }
 
+// import reads files as load does, and is held to the grant the same way; the
+// gate judges the path the import resolved against the importing file.
+func TestPluginImportStaysInsideTheGrant(t *testing.T) {
+	f := newPluginFixture(t)
+	f.file(t, "notes/hop.scm", `(import "inc.scm")`)
+	f.file(t, "notes/out.scm", `(import "../../outside.scm")`)
+	path := f.file(t, "importer.scm", `(plugin (name "importer") (requires (fs (read "notes"))))`)
+	host := Allow(FSRead(f.root))
+	p, err := OpenPlugin(context.Background(), path, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	for src, want := range map[string]int64{
+		`(begin (import "notes/inc.scm") included)`:               42,
+		`(begin (import "notes/hop.scm" (prefix h:)) h:included)`: 42,
+	} {
+		if v, err := p.Interp.EvalString(context.Background(), src); err != nil || v.I != want {
+			t.Errorf("%s: %v, %v", src, v, err)
+		}
+	}
+	for _, src := range []string{`(import "../outside.scm")`, `(import "notes/out.scm")`, `(import "/etc/hosts")`} {
+		_, err := p.Interp.EvalString(context.Background(), src)
+		var d *scheme.Denied
+		if !errors.As(err, &d) {
+			t.Errorf("%s: %v, want a denial", src, err)
+		}
+	}
+	if _, ok := p.Interp.Global().Lookup("escaped"); ok {
+		t.Error("a file outside the grant was imported")
+	}
+
+	bare := f.file(t, "bare.scm", `(plugin (name "bare"))`)
+	q, err := OpenPlugin(context.Background(), bare, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	if _, err := q.Interp.EvalString(context.Background(), `(import "notes/inc.scm")`); err == nil || !strings.Contains(err.Error(), "import is not available: the fs module is not granted") {
+		t.Errorf("import without fs: %v", err)
+	}
+}
+
 func TestPluginLoadCannotFollowASymlinkOut(t *testing.T) {
 	f := newPluginFixture(t)
 	if err := os.Symlink(filepath.Join(f.root, "outside.scm"), filepath.Join(f.dir, "notes", "sneaky.scm")); err != nil {

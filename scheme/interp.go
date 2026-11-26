@@ -20,6 +20,7 @@ var specialForms = []string{
 	"cond", "case", "else", "=>", "and", "or",
 	"do", "when", "unless", "guard", "with-output-to-string",
 	"define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
+	"import", "export",
 }
 
 // Interp is one interpreter instance: a global environment, the primitive
@@ -55,6 +56,7 @@ type Interp struct {
 	// loads itself, directly or through another, is refused.
 	loadMu  sync.Mutex
 	loading map[string]bool
+	modules map[string]*module // the files import has evaluated, by absolute path
 
 	// quiesce guards running, and the start of evaluations and tasks, against
 	// a change to a pair (mutation.go). running counts the evaluations in
@@ -242,12 +244,14 @@ func (in *Interp) evalSource(ctx context.Context, file *Source, src string) (Val
 }
 
 // LoadFile evaluates a file's forms in the global environment. A relative
-// path resolves against the base directory (WithBaseDir).
+// path resolves against the base directory (WithBaseDir). An import in the
+// file takes a relative path against the file's own directory.
 func (in *Interp) LoadFile(ctx context.Context, path string) error {
 	if !filepath.IsAbs(path) && in.baseDir != "" {
 		path = filepath.Join(in.baseDir, path)
 	}
 	if abs, err := filepath.Abs(path); err == nil {
+		ctx = withFile(ctx, abs, nil)
 		in.loadMu.Lock()
 		if in.loading[abs] {
 			in.loadMu.Unlock()
@@ -527,6 +531,12 @@ func (in *Interp) evalIn(t *task, ctx context.Context, x Value, env *Env, fn *Cl
 
 			case "guard":
 				return in.evalGuard(t, ctx, form, env)
+
+			case "import":
+				return in.evalImport(t, ctx, form, env)
+
+			case "export":
+				return in.evalExport(ctx, form, env)
 
 			case "define-syntax":
 				return in.evalDefineSyntax(form, env)

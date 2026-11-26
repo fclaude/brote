@@ -35,6 +35,8 @@ var specialFormDocs = map[string]string{
 	"letrec-syntax":         "(letrec-syntax ((name (syntax-rules …)) …) body …)\nLike let-syntax; the macros may use each other.",
 	"syntax-rules":          "(syntax-rules (literal …) (pattern template) …)\nThe rules of a macro; only valid inside define-syntax and let-syntax.",
 	"with-output-to-string": "(with-output-to-string expr …)\nEvaluate the exprs and return what they displayed or wrote, as a string.",
+	"import":                "(import \"file.scm\")\n(import \"file.scm\" name … (prefix p))\nEvaluate a file once, in an environment of its own, and define here the names it exports: all of them, or only the names given; (prefix p) puts p before each. A relative path is taken against the directory of the file that imports it.",
+	"export":                "(export name …)\nAt the top level of a file that is imported: the names import gives the file that imports it. Without export, everything the file defines is given.",
 }
 
 // SpecialForms is the names the language reserves for its special forms.
