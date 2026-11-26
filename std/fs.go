@@ -1,11 +1,13 @@
 package std
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,6 +30,7 @@ type rootOps interface {
 	MkdirAll(name string, perm os.FileMode) error
 	Remove(name string) error
 	Rename(oldname, newname string) error
+	FS() fs.FS
 	Close() error
 }
 
@@ -50,6 +53,7 @@ func (r plainRoot) Remove(name string) error { return os.Remove(r.path(name)) }
 func (r plainRoot) Rename(oldname, newname string) error {
 	return os.Rename(r.path(oldname), r.path(newname))
 }
+func (r plainRoot) FS() fs.FS    { return os.DirFS(r.dir) }
 func (r plainRoot) Close() error { return nil }
 
 // fsRoot is one granted directory tree. It is opened on first use, as an
@@ -223,6 +227,145 @@ func (f *fsys) readText(path string) (string, error) {
 	return strings.ToValidUTF8(string(b), "�"), nil
 }
 
+// errNotDir is what walk says of a path that is not a directory.
+var errNotDir = errors.New("not a directory")
+
+// walk lists what is below the directory dir, depth first, without following
+// the symbolic links it finds there (a link is an entry like a file, and a
+// link to a directory above would loop). visit is given each entry's path
+// below dir, split into its names, and says whether to list it and, for a
+// directory, whether to go into it. The paths listed are dir joined with that
+// path, so they can be handed back to the other fs procedures, sorted. A
+// directory below that cannot be read is skipped; dir itself not existing,
+// not being a directory or not being readable is an error.
+func (f *fsys) walk(ctx context.Context, dir string, visit func(rel []string, d fs.DirEntry) (keep, descend bool)) ([]string, error) {
+	r, name, err := f.resolve(dir, false)
+	if err != nil {
+		return nil, err
+	}
+	root, err := r.open()
+	if err != nil {
+		return nil, err
+	}
+	tree := root.FS()
+	start := filepath.ToSlash(name)
+	st, err := fs.Stat(tree, start)
+	if err != nil {
+		return nil, f.fail(dir, err)
+	}
+	if !st.IsDir() {
+		return nil, fmt.Errorf("%s: %w", dir, errNotDir)
+	}
+	var out []string
+	err = fs.WalkDir(tree, start, func(p string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if p == start {
+			return err
+		}
+		if err != nil {
+			return nil
+		}
+		rel := p
+		if start != "." {
+			rel = strings.TrimPrefix(p, start+"/")
+		}
+		keep, descend := visit(strings.Split(rel, "/"), d)
+		if keep {
+			if len(out) == maxListEntries {
+				return fmt.Errorf("more than %d entries", maxListEntries)
+			}
+			out = append(out, filepath.Join(dir, filepath.FromSlash(rel)))
+		}
+		if d.IsDir() && !descend {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, f.fail(dir, err)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// globParts splits a pattern into the directory the search starts from (its
+// leading names that have no wildcard, "." if there are none) and the names
+// to match below it. Names are separated by "/" (and on Windows by "\" too).
+// A malformed name is an error before anything is read.
+func globParts(pattern string) (base string, parts []string, err error) {
+	vol := filepath.VolumeName(pattern)
+	p := filepath.ToSlash(pattern[len(vol):])
+	var names []string
+	for _, n := range strings.Split(p, "/") {
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	i := 0
+	for i < len(names) && !strings.ContainsAny(names[i], `*?[\`) {
+		i++
+	}
+	base = strings.Join(names[:i], "/")
+	if strings.HasPrefix(p, "/") {
+		base = "/" + base
+	}
+	if base = vol + base; base == "" {
+		base = "."
+	}
+	for _, n := range names[i:] {
+		if _, err := path.Match(n, ""); err != nil {
+			return "", nil, fmt.Errorf("%s: %w", pattern, err)
+		}
+	}
+	return filepath.FromSlash(base), names[i:], nil
+}
+
+// globMatch reports whether the names of a path match the pattern's: each
+// name as path.Match has it, and "**" any number of names, none included.
+func globMatch(pat, names []string) bool {
+	if len(pat) == 0 {
+		return len(names) == 0
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(names); i++ {
+			if globMatch(pat[1:], names[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(names) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pat[0], names[0])
+	return ok && globMatch(pat[1:], names[1:])
+}
+
+// globPrefix reports whether something below the directory with these names
+// could match, so that the walk need not go into the ones that cannot.
+func globPrefix(pat, names []string) bool {
+	switch {
+	case len(names) == 0:
+		return true
+	case len(pat) == 0:
+		return false
+	case pat[0] == "**":
+		return true
+	}
+	ok, _ := path.Match(pat[0], names[0])
+	return ok && globPrefix(pat[1:], names[1:])
+}
+
+func strList(ss []string) scheme.Value {
+	out := make([]scheme.Value, len(ss))
+	for i, s := range ss {
+		out[i] = scheme.Str(s)
+	}
+	return scheme.List(out...)
+}
+
 func (f *fsys) writeText(path, text string, appendTo bool) error {
 	if int64(len(text)) > f.maxFile {
 		return fmt.Errorf("%s: %d bytes is more than the %d this host allows", path, len(text), f.maxFile)
@@ -393,6 +536,55 @@ func installFS(s *installer) error {
 				scheme.Cons(scheme.Str("mode"), scheme.Str(fmt.Sprintf("%04o", st.Mode().Perm()))),
 				scheme.Cons(scheme.Str("mtime"), seconds(st.ModTime())),
 			), nil
+		},
+	})
+	s.add(&scheme.Prim{
+		Name: "fs-walk",
+		Meta: with(read, "Every file below a directory, at any depth, as a sorted list of paths that start with the directory as given (so they can be passed to fs-read-text). Directories themselves are not listed. Symbolic links are listed like files and not followed. A directory below that cannot be read is skipped; a path that is not a directory is an error.", pathP),
+		Handler: func(c *scheme.Call) (scheme.Value, error) {
+			p, err := str(c, 0)
+			if err != nil {
+				return scheme.Value{}, err
+			}
+			out, err := f.walk(c.Ctx, p, func(_ []string, d fs.DirEntry) (bool, bool) { return !d.IsDir(), true })
+			if err != nil {
+				return scheme.Value{}, err
+			}
+			return strList(out), nil
+		},
+	})
+	s.add(&scheme.Prim{
+		Name: "fs-glob",
+		Meta: with(read, "The files and directories whose paths match a pattern, sorted. Names are separated by /; in each, * matches any run of characters (a leading dot too), ? one character, [abc] or [a-z] one of a set, and \\ escapes the next character. A name that is just ** matches any number of directories, none included: \"src/**/*.go\". The names before the first wildcard are the directory searched, which must be inside the grant; symbolic links below it are not followed. No match, or no such directory, is the empty list.", scheme.Param{Name: "pattern", Type: "string", Role: "source"}),
+		Handler: func(c *scheme.Call) (scheme.Value, error) {
+			p, err := str(c, 0)
+			if err != nil {
+				return scheme.Value{}, err
+			}
+			base, parts, err := globParts(p)
+			if err != nil {
+				return scheme.Value{}, err
+			}
+			if len(parts) == 0 { // no wildcard: the path itself, if it is there
+				_, err := stat(base)
+				switch {
+				case err == nil:
+					return strList([]string{base}), nil
+				case errors.Is(err, fs.ErrNotExist):
+					return scheme.Nil, nil
+				}
+				return scheme.Value{}, err
+			}
+			out, err := f.walk(c.Ctx, base, func(names []string, d fs.DirEntry) (bool, bool) {
+				return globMatch(parts, names), d.IsDir() && globPrefix(parts, names)
+			})
+			switch {
+			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errNotDir):
+				return scheme.Nil, nil
+			case err != nil:
+				return scheme.Value{}, err
+			}
+			return strList(out), nil
 		},
 	})
 	s.add(&scheme.Prim{

@@ -220,6 +220,8 @@ Files and directories, inside the trees the host granted. A path is taken agains
 | `(fs-write-text path text)` | write the file, creating it or replacing what it held |
 | `(fs-append-text path text)` | add to the end of the file, creating it if needed |
 | `(fs-list path)` | the names in a directory, sorted |
+| `(fs-walk path)` | every file below a directory, at any depth: a sorted list of paths that start with `path` as given, so they can be passed to `fs-read-text`. Directories themselves aren't listed; symbolic links are listed like files and not followed |
+| `(fs-glob pattern)` | the files and directories whose paths match `pattern`, sorted (see below). No match, or no such directory, is `()` |
 | `(fs-stat path)` | an association list: `"size"`, `"dir"`, `"mode"` (such as `"0644"`) and `"mtime"` |
 | `(fs-exists? path)` | `#t` or `#f`. A path outside the grant is an error, not `#f` |
 | `(fs-mkdir path)` | make the directory and any missing parents. One that exists is fine |
@@ -236,6 +238,14 @@ A script writes, reads back, lists and cleans up:
 ```console
 $ brote -e '(begin (fs-mkdir "notes") (fs-write-text "notes/a.txt" "one") (fs-append-text "notes/a.txt" " two") (fs-write-text "notes/b.txt" "") (list (fs-read-text "notes/a.txt") (fs-list "notes") (assoc-ref (fs-stat "notes/a.txt") "size")))'
 ("one two" ("a.txt" "b.txt") 7)
+```
+
+A pattern for `fs-glob` is names separated by `/`. In each name `*` matches any run of characters, a leading dot included, `?` matches one character, `[abc]` or `[a-z]` one of a set (`[^a-z]` one not in it), and `\` makes the next character plain. A name that is just `**` matches any number of directories, none included, so `src/**/*.go` finds `src/main.go` and `src/a/b/util.go`. The names before the first wildcard are the directory searched, and it must be inside the grant. Below it, symbolic links are listed but not followed. A pattern without a wildcard gives the path itself if it exists, `()` if not. A directory below that can't be read is skipped by both procedures.
+
+<!-- run-shell -->
+```console
+$ brote -e '(begin (fs-mkdir "src/a/b") (fs-write-text "src/main.go" "") (fs-write-text "src/a/b/util.go" "") (fs-write-text "src/a/notes.txt" "") (list (fs-glob "src/*.go") (fs-glob "src/**/*.go") (fs-walk "src/a")))'
+(("src/main.go") ("src/a/b/util.go" "src/main.go") ("src/a/b/util.go" "src/a/notes.txt"))
 ```
 
 With the file system limited to one directory, a path outside it is refused before anything is read:

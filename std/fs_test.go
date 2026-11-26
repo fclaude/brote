@@ -143,6 +143,58 @@ func TestFSSymlinkOutOfAWriteTree(t *testing.T) {
 	}
 }
 
+// fs-glob and fs-walk list what is below a granted directory without
+// following the fixture's links out of it (data/up leads to the root, where
+// secret.txt is), and refuse a start outside the grant or through a link.
+func TestFSGlobAndWalk(t *testing.T) {
+	f := newFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.data, "sub", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"sub/b.txt", "sub/deep/c.txt", "sub/deep/d.md"} {
+		if err := os.WriteFile(filepath.Join(f.data, n), []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for src, want := range map[string]string{
+		`(fs-glob "data/**/*.txt")`:               `("data/a.txt" "data/sub/b.txt" "data/sub/deep/c.txt")`,
+		`(fs-glob "data/*")`:                      `("data/a.txt" "data/abs" "data/link" "data/sub" "data/up")`,
+		`(fs-glob "data/*/*/?.md")`:               `("data/sub/deep/d.md")`,
+		`(fs-glob "data/sub/**")`:                 `("data/sub/b.txt" "data/sub/deep" "data/sub/deep/c.txt" "data/sub/deep/d.md")`,
+		`(fs-glob "data/**/secret*")`:             `()`,
+		`(fs-glob "data/none/*")`:                 `()`,
+		`(fs-glob "data/a.txt/*")`:                `()`,
+		`(fs-glob "data/a.txt")`:                  `("data/a.txt")`,
+		`(fs-glob "data/none")`:                   `()`,
+		`(fs-walk "data")`:                        `("data/a.txt" "data/abs" "data/link" "data/sub/b.txt" "data/sub/deep/c.txt" "data/sub/deep/d.md" "data/up")`,
+		`(fs-walk "data/sub/deep")`:               `("data/sub/deep/c.txt" "data/sub/deep/d.md")`,
+		`(fs-walk "out")`:                         `()`,
+		`(map fs-read-text (fs-walk "data/sub"))`: `("sub/b.txt" "sub/deep/c.txt" "sub/deep/d.md")`,
+	} {
+		got, err := f.eval(t, f.policy(), src)
+		if filepath.Separator == '\\' {
+			got = strings.ReplaceAll(got, `\\`, "/")
+		}
+		if err != nil || got != want {
+			t.Errorf("%s\n got  %s, %v\n want %s", src, got, err, want)
+		}
+	}
+	for src, want := range map[string]string{
+		`(fs-glob "*/secret.txt")`: "outside",
+		`(fs-glob "data/up/*")`:    "escapes",
+		`(fs-walk "data/up")`:      "escapes",
+		`(fs-walk "..")`:           "outside",
+		`(fs-walk "data/a.txt")`:   "not a directory",
+		`(fs-walk "data/none")`:    "data/none",
+		`(fs-glob "data/[")`:       "syntax error in pattern",
+	} {
+		_, err := f.eval(t, f.policy(), src)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v, want it to contain %q", src, err, want)
+		}
+	}
+}
+
 func TestFSWrites(t *testing.T) {
 	f := newFixture(t)
 	for src, want := range map[string]string{
