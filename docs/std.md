@@ -302,6 +302,13 @@ The result of every procedure here carries the taint `external:http`.
 |---|---|
 | `(proc-run argv [options])` | an association list: `"exit-code"`, `"stdout"` and `"stderr"` |
 | `(proc-output argv [options])` | the standard output, or an error that carries the exit status and standard error when the exit status is not 0 |
+| `(proc-start argv [options])` | a process, at once, while the program runs (see [Talking to a running program](#talking-to-a-running-program)) |
+| `(proc-read-line process)` | the next line of its output, waiting for it, or `(eof-object)` once the program has closed its output |
+| `(proc-write process text)` | write to its input; it must have been started with `("stdin" . pipe)` |
+| `(proc-close-input process)` | close its input, so the program reads the end of it |
+| `(proc-wait process)` | wait for it to exit: `"exit-code"`, `"stdout"` (what wasn't read) and `"stderr"`, the same each time it's asked |
+| `(proc-kill! process)` | stop it; void |
+| `(proc? x)` | |
 
 `argv` is a list of strings: the command, then its arguments. It is started directly, **never through a shell**, so a space, `;`, `|`, `$(…)` or `*` in an argument is just text. The options are an association list: `"stdin"` (a string to feed it) and `"timeout"` (seconds, within the host's limit of 30 by default). The program runs in the directory the host chose, and sees only the environment variables the host granted. It gets at most 1 MB of output.
 
@@ -318,6 +325,38 @@ brote: proc-run: ls is not a command this host lets scripts run
 A command the host did not grant is an error, and so is one that cannot start, one that runs past its timeout (it is stopped, and on Unix the processes it started with it; on Windows only the program itself), and one that writes more than the limit. A nonzero exit is a result.
 
 What a granted command does is the command's business. Allowing `git` allows what `git` can be told to do, and allowing `sh`, `python` or `env` allows everything. Grant programs the way you would grant them to a person you do not fully trust.
+
+### Talking to a running program
+
+`proc-run` waits for the program and gives back all it wrote. `proc-start` starts the same programs, under the same grant, and returns a process at once: a script can read the output line by line as it's written, write to the program's input, and connect one program's output to the next one's input.
+
+Its options are `"timeout"`, as for `proc-run`, and `"stdin"`, which is one of these:
+
+- a string, which the program reads as its input
+- the symbol `pipe`, for input the script writes with `proc-write` and ends with `proc-close-input`
+- another process, whose output becomes this one's input through an operating-system pipe, as `|` does in a shell. Nothing else can read that output then, and a process whose output has been read from can't be given
+
+Without `"stdin"` the input is empty.
+
+<!-- run-unix -->
+```lisp
+(define words (proc-start (list "printf" "pear\napple\npear\n")))
+(define sorted (proc-start (list "sort" "-u") (list (cons "stdin" words))))
+(let loop ((line (proc-read-line sorted)))
+  (if (not (eof-object? line))
+      (begin (display (string-upcase line)) (newline) (loop (proc-read-line sorted)))))
+(assoc-ref (proc-wait sorted) "exit-code")
+```
+
+```text
+APPLE
+PEAR
+0
+```
+
+The script printed the lines as `sort` gave them, and the last value is the exit code.
+
+A line of output, and what `proc-wait` collects of `"stdout"` and `"stderr"`, are limited by the host's output limit. Output nobody reads waits in the pipe until `proc-wait` reads and returns it. A program runs until it exits, its timeout passes, `proc-kill!` stops it, a `proc-read-line`, `proc-write` or `proc-wait` on it is cancelled (by `with-timeout`, say), or the host closes the runtime. The `brote` command closes it when the run ends, so nothing a script started outlives the script.
 
 ## One interpreter, different grants
 

@@ -113,6 +113,16 @@ func (cs *closerSet) add(c io.Closer) error {
 	return errors.New("the runtime has been closed")
 }
 
+// remove takes c out of the set: it has ended by itself (a process that was
+// waited for), and the set need not keep it until Runtime.Close.
+func (cs *closerSet) remove(c io.Closer) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if i := slices.Index(cs.list, c); i >= 0 {
+		cs.list = slices.Delete(cs.list, i, i+1)
+	}
+}
+
 // close closes everything added, newest first: what a script started (a
 // server, a watch) before the handles it uses.
 func (cs *closerSet) close() error {

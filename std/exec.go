@@ -99,6 +99,21 @@ func installExec(s *installer) error {
 		}
 		return out
 	}
+	// command is the program argv names, ready to start under ctx: resolved
+	// against the grant, in the host's directory, with the granted environment.
+	command := func(ctx context.Context, argv []string) (*exec.Cmd, error) {
+		file, err := cmds.resolve(argv[0])
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.CommandContext(ctx, file, argv[1:]...)
+		cmd.Args[0] = argv[0]
+		cmd.Dir = base
+		cmd.Env = childEnv()
+		cmd.WaitDelay = 2 * time.Second
+		ownGroup(cmd)
+		return cmd, nil
+	}
 
 	s.add(&scheme.Prim{
 		Name: "proc-run",
@@ -115,22 +130,9 @@ func installExec(s *installer) error {
 			TaintSource:  scheme.TagShell,
 		},
 		Handler: func(c *scheme.Call) (scheme.Value, error) {
-			items, err := c.List(0)
+			argv, err := argvArg(c)
 			if err != nil {
 				return scheme.Value{}, err
-			}
-			argv := make([]string, len(items))
-			for i, it := range items {
-				if it.Kind != scheme.KString {
-					return scheme.Value{}, fmt.Errorf("argument 1: element %d: expected a string, got %s", i+1, scheme.Write(it))
-				}
-				if strings.ContainsRune(it.S, 0) {
-					return scheme.Value{}, fmt.Errorf("argument 1: element %d contains a NUL byte", i+1)
-				}
-				argv[i] = it.S
-			}
-			if len(argv) == 0 || argv[0] == "" {
-				return scheme.Value{}, errors.New("argument 1: expected a command and its arguments")
 			}
 			var stdin *string
 			timeout := scope.Timeout
@@ -151,33 +153,21 @@ func installExec(s *installer) error {
 						}
 						stdin = &o.P.Cdr.S
 					case "timeout":
-						if !o.P.Cdr.IsNumber() || o.P.Cdr.AsFloat() <= 0 {
-							return scheme.Value{}, errors.New(`options: "timeout" takes a positive number of seconds`)
+						if timeout, err = timeoutOption(o.P.Cdr, scope.Timeout); err != nil {
+							return scheme.Value{}, err
 						}
-						d := time.Duration(o.P.Cdr.AsFloat() * float64(time.Second))
-						if d > scope.Timeout {
-							return scheme.Value{}, fmt.Errorf(`options: "timeout" %s is more than the %s this host allows`, scheme.Write(o.P.Cdr), scope.Timeout)
-						}
-						timeout = d
 					default:
 						return scheme.Value{}, fmt.Errorf("options: unknown option %s (known: stdin, timeout)", scheme.Write(o.P.Car))
 					}
 				}
 			}
-			file, err := cmds.resolve(argv[0])
+			ctx, cancel := context.WithTimeout(c.Ctx, timeout)
+			defer cancel()
+			cmd, err := command(ctx, argv)
 			if err != nil {
 				s.report(Exec, "run", strings.Join(argv, " "), err)
 				return scheme.Value{}, err
 			}
-
-			ctx, cancel := context.WithTimeout(c.Ctx, timeout)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, file, argv[1:]...)
-			cmd.Args[0] = argv[0]
-			cmd.Dir = base
-			cmd.Env = childEnv()
-			cmd.WaitDelay = 2 * time.Second
-			ownGroup(cmd)
 			if stdin != nil {
 				cmd.Stdin = strings.NewReader(*stdin)
 			}
@@ -211,5 +201,41 @@ func installExec(s *installer) error {
 			), nil
 		},
 	})
-	return nil
+	return installProc(s, scope, command)
+}
+
+// argvArg is argument 1 of proc-run and proc-start: a command and its
+// arguments, as a list of strings.
+func argvArg(c *scheme.Call) ([]string, error) {
+	items, err := c.List(0)
+	if err != nil {
+		return nil, err
+	}
+	argv := make([]string, len(items))
+	for i, it := range items {
+		if it.Kind != scheme.KString {
+			return nil, fmt.Errorf("argument 1: element %d: expected a string, got %s", i+1, scheme.Write(it))
+		}
+		if strings.ContainsRune(it.S, 0) {
+			return nil, fmt.Errorf("argument 1: element %d contains a NUL byte", i+1)
+		}
+		argv[i] = it.S
+	}
+	if len(argv) == 0 || argv[0] == "" {
+		return nil, errors.New("argument 1: expected a command and its arguments")
+	}
+	return argv, nil
+}
+
+// timeoutOption reads the "timeout" option: seconds, more than 0 and at most
+// the host's limit.
+func timeoutOption(v scheme.Value, limit time.Duration) (time.Duration, error) {
+	if !v.IsNumber() || v.AsFloat() <= 0 {
+		return 0, errors.New(`options: "timeout" takes a positive number of seconds`)
+	}
+	d := time.Duration(v.AsFloat() * float64(time.Second))
+	if d > limit {
+		return 0, fmt.Errorf(`options: "timeout" %s is more than the %s this host allows`, scheme.Write(v), limit)
+	}
+	return d, nil
 }
