@@ -3,6 +3,7 @@ package repl_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,28 @@ func TestErrorDoesNotEndTheSession(t *testing.T) {
 	}
 	if !strings.Contains(got, "error: ") || strings.Count(got, "error: ") != 2 {
 		t.Fatalf("the unbalanced line was not reported:\n%s", got)
+	}
+}
+
+// A Halt is the host's stop, not an error to report: the session ends with
+// it, and neither the rest of its line nor later lines are evaluated.
+func TestAHaltEndsTheSession(t *testing.T) {
+	var out bytes.Buffer
+	in := scheme.New(scheme.WithOutput(&out))
+	stop := errors.New("work is over")
+	if err := in.Register(&scheme.Prim{
+		Name:    "stop",
+		Meta:    scheme.Meta{Doc: "End the session."},
+		Handler: func(c *scheme.Call) (scheme.Value, error) { return scheme.Value{}, &scheme.Halt{Err: stop} },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := repl.Run(context.Background(), in, strings.NewReader("(display \"a\")\n(stop) (display \"b\")\n(display \"c\")\n"), &out, repl.Options{})
+	if !errors.Is(err, stop) {
+		t.Fatalf("Run returned %v, want the halt", err)
+	}
+	if got := out.String(); got != "a" {
+		t.Fatalf("output %q, want only what came before the halt", got)
 	}
 }
 

@@ -1,7 +1,7 @@
 // Command brote is the standalone Brote Scheme interpreter: a REPL, a script
 // runner and an expression evaluator over the same interpreter a Go program
 // embeds. It has the language's builtins, `load`, three host primitives for
-// scripts (command-line and read-file; host.go), standard input as the current
+// scripts (command-line, read-file and exit; host.go), standard input as the current
 // input port, and the extended
 // library of package std under a policy (policy.go). By default a script may
 // reach everything the person running it can; -sandbox, -policy, -allow and
@@ -68,6 +68,7 @@ once there is no more; the REPL reads standard input itself, so there they find
 the end at once.
 
 An error is written to standard error and ends the run with status 1.
+(exit) ends it at once with status 0, (exit n) with n, (exit #f) with 1.
 `
 
 func main() {
@@ -174,6 +175,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	switch {
 	case given["e"]:
 		v, err := in.EvalNamed(ctx, "<expr>", *expr)
+		if code, ok := exited(err); ok {
+			return code
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "brote: %s\n", repl.Describe(err))
 			return 1
@@ -184,6 +188,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case len(files) > 0:
 		for _, path := range files {
 			if err := in.LoadFile(ctx, path); err != nil {
+				if code, ok := exited(err); ok {
+					return code
+				}
 				fmt.Fprintf(stderr, "brote: %s\n", scheme.FormatError(err))
 				return 1
 			}
@@ -208,11 +215,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 		if err := repl.Run(ctx, in, stdin, stdout, o); err != nil {
+			if code, ok := exited(err); ok {
+				return code
+			}
 			fmt.Fprintf(stderr, "brote: %v\n", err)
 			return 1
 		}
 	}
 	return 0
+}
+
+// exited reports the status a script gave (exit), if err is that stop.
+func exited(err error) (int, bool) {
+	var e exitStatus
+	if errors.As(err, &e) {
+		return int(e), true
+	}
+	return 0, false
 }
 
 // isTerminal reports whether r is a character device, which is what a

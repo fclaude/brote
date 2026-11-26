@@ -105,7 +105,10 @@ func (s *scanLines) AddHistory(string) {}
 // not void, or the error the form raised, to w until r ends. Input that stops
 // short, an open list or string, continues on the next line. An error does
 // not end the session: it is written, the rest of the line is dropped, and
-// the loop reads on. Run returns the reader's error, if any.
+// the loop reads on. A *scheme.Halt is the exception: the host has decided
+// the work is over (the brote command's (exit) is one), so Run returns it at
+// once without evaluating the rest of the line. Otherwise Run returns the
+// reader's error, if any.
 func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Options) error {
 	lines := o.Lines
 	var sc *bufio.Scanner
@@ -171,6 +174,12 @@ func Run(ctx context.Context, in *scheme.Interp, r io.Reader, w io.Writer, o Opt
 		}
 		for _, f := range forms {
 			v, err := in.Eval(evalCtx, f, in.Global())
+			var halt *scheme.Halt
+			if errors.As(err, &halt) {
+				release()
+				startLine()
+				return err
+			}
 			if err != nil {
 				startLine()
 				fmt.Fprintf(w, "error: %s\n", Describe(err))

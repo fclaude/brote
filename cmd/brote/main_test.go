@@ -174,3 +174,46 @@ func TestCommandProcess(t *testing.T) {
 	fmt.Println(os.Args[len(os.Args)-1])
 	os.Exit(0)
 }
+
+// (exit) ends the run at once with the status it was given, from an
+// expression, a file (later files are not run) or the REPL; guard cannot
+// catch it. A status the system cannot carry is an ordinary error.
+func TestExitEndsTheRunWithItsStatus(t *testing.T) {
+	for _, c := range []struct {
+		expr   string
+		status int
+		out    string
+	}{
+		{`(exit 3)`, 3, ""},
+		{`(exit)`, 0, ""},
+		{`(exit #t)`, 0, ""},
+		{`(exit #f)`, 1, ""},
+		{`(begin (display "before") (exit 0) (display "after"))`, 0, "before"},
+		{`(guard (e (#t (display "caught"))) (exit 5))`, 5, ""},
+		{`(begin (task-wait (spawn (lambda () (exit 6)))) (display "after"))`, 6, ""},
+	} {
+		status, out, errs := invoke(t, "", "-e", c.expr)
+		if status != c.status || out != c.out || errs != "" {
+			t.Errorf("%s: status %d, stdout %q, stderr %q; want status %d, stdout %q", c.expr, status, out, errs, c.status, c.out)
+		}
+	}
+	for _, bad := range []string{`(exit 256)`, `(exit -1)`, `(exit "x")`, `(exit 1.5)`} {
+		status, _, errs := invoke(t, "", "-e", bad)
+		if status != 1 || !strings.Contains(errs, "exit: argument 1") {
+			t.Errorf("%s: status %d, stderr %q", bad, status, errs)
+		}
+	}
+
+	dir := t.TempDir()
+	a := writeFile(t, dir, "a.scm", `(display "a") (exit 4) (display "b")`)
+	b := writeFile(t, dir, "b.scm", `(display "never")`)
+	status, out, errs := invoke(t, "", a, b)
+	if status != 4 || out != "a" || errs != "" {
+		t.Errorf("files: status %d, stdout %q, stderr %q", status, out, errs)
+	}
+
+	status, out, errs = invoke(t, "(display 1)\n(exit 7) (display 2)\n(display 3)\n")
+	if status != 7 || out != "1" || errs != "" {
+		t.Errorf("REPL: status %d, stdout %q, stderr %q", status, out, errs)
+	}
+}

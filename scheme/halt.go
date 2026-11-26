@@ -1,7 +1,8 @@
 package scheme
 
 // Halt is an error a Scheme program may not catch: the harness has decided
-// the work is over. Budget and progress stops raise it.
+// the work is over. Budget and progress stops raise it, and so does the brote
+// command's (exit). repl.Run ends the session on one and returns it.
 //
 // It exists because orchestration now lives in Scheme. A strategy is
 // ordinary code, and ordinary code can wrap anything in guard; a strategy

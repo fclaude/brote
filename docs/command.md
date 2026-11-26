@@ -75,12 +75,13 @@ $ echo $?
 
 ## Arguments, files and standard input
 
-A script that needs to read something has two procedures of the command's own, and standard input. The first two belong to the command, so a Go program that embeds Brote doesn't get them unless it registers its own.
+A script that needs to read something has two procedures of the command's own, and standard input; a third, `exit`, ends the run with a status. The three belong to the command, so a Go program that embeds Brote doesn't get them unless it registers its own.
 
 | Procedure | What it gives back |
 |---|---|
 | `(command-line)` | the arguments after `--` as a list of strings, `()` when there are none |
 | `(read-file path)` | the contents of the file as a string. A file that can't be read is an error that names it |
+| `(exit)` `(exit status)` | doesn't return: ends the run at once (see [Ending with a status](#ending-with-a-status)) |
 | `(read-line)` `(read-char)` `(peek-char)` `(read-string k)` `(read)` | the next line (without its line ending), character, up to `k` characters, or datum of standard input, or `(eof-object)` once there is no more. These are the language's [port procedures](scheme.md#ports) on the current input port, which here is standard input. The REPL reads standard input itself, so there the input is empty |
 
 Everything after `--` belongs to the script, even if it looks like one of `brote`'s own flags:
@@ -134,6 +135,22 @@ A file that doesn't exist is an error like any other:
 $ brote -e '(read-file "missing.txt")'
 brote: read-file: missing.txt: no such file or directory
 ```
+
+### Ending with a status
+
+`(exit)` ends the run at once, with status 0; `(exit n)` ends it with status `n`, an integer from 0 to 255, and `(exit #t)` and `(exit #f)` with 0 and 1. Nothing more is evaluated, files given after the one that called it are not run, and nothing is written to standard error. `guard` can't catch it, and an `exit` inside a task ends the whole run. In the REPL it ends the session with that status. A status that isn't one of these is an ordinary error.
+
+<!-- run-shell -->
+```console
+$ printf '(define (check ok?)\n  (if (not ok?) (begin (display "check failed") (newline) (exit 3))))\n(check (= 1 2))\n(display "not reached")\n' > check.scm
+$ brote check.scm; echo "status $?"
+check failed
+status 3
+$ brote -e '(guard (e (#t (display "caught"))) (exit 4))'; echo "status $?"
+status 4
+```
+
+In a file run by `brote test`, `exit` stops that file, and it's reported as a file that could not run to the end.
 
 ## Running tests
 

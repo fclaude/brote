@@ -63,7 +63,7 @@ A hash table is a pointer to shared storage, like a vector. Its entries stay in 
 
 Source is read with `scheme.Read` (every top-level form) or `ReadOne`.
 
-The `brote` command registers two more procedures for scripts, `command-line` and `read-file`, and gives the interpreter its standard input with `scheme.WithInput(r)`: that is the current input port, which `read-line`, `read-char`, `read-string` and `read` read when they are not given a port. They're part of the command (`cmd/brote/host.go`), so an interpreter you create with `scheme.New` has no input (reading finds the end at once) and neither of the two procedures. See the [command page](command.md) for what they do.
+The `brote` command registers three more procedures for scripts, `command-line`, `read-file` and `exit`, and gives the interpreter its standard input with `scheme.WithInput(r)`: that is the current input port, which `read-line`, `read-char`, `read-string` and `read` read when they are not given a port. They're part of the command (`cmd/brote/host.go`), so an interpreter you create with `scheme.New` has no input (reading finds the end at once) and none of the three procedures. `exit` is an example of a host's stop: it returns a `*scheme.Halt` carrying the status, which `guard` lets through, which ends the evaluation from inside a task, and which ends `repl.Run` (it returns the error). See the [command page](command.md) for what they do.
 
 ## Host operations
 
