@@ -94,6 +94,23 @@ func TestCommands(t *testing.T) {
 	}
 }
 
+// docs/command.md lists ,? for ,help and ,q and ,exit for ,quit; nothing else
+// pins the aliases.
+func TestCommandAliases(t *testing.T) {
+	help := run(t, ",?\n", repl.Options{Commands: true})
+	for _, want := range []string{",doc NAME", ",apropos TEXT", ",policy", ",quit"} {
+		if !strings.Contains(help, want) {
+			t.Errorf(",? did not list %q:\n%s", want, help)
+		}
+	}
+	for _, leave := range []string{",q", ",exit"} {
+		got := run(t, leave+"\n(display \"not reached\")\n", repl.Options{Commands: true})
+		if strings.Contains(got, "not reached") {
+			t.Errorf("%s did not end the session:\n%s", leave, got)
+		}
+	}
+}
+
 // Without Commands a comma is Scheme's, so a script piped in is not
 // reinterpreted.
 func TestCommandsAreOffByDefault(t *testing.T) {

@@ -39,9 +39,11 @@ Navigation is within each document; workspace search and rename index every
 files of 1 MB, hidden directories skipped), open documents winning, so they
 reach files that were never opened. An indexed file that changed on disk is
 read again before it is searched or renamed in; files created after
-initialize are not indexed. Host-specific module imports, dynamic
-bindings, macros and inferred types are not resolved. Unknown names are not
-errors. The server advertises `textDocument/formatting` (the same
+initialize are not indexed. On Windows those paths are handled natively: a
+drive-letter path, a UNC share and a `file://localhost/…` URI name one document,
+and its key ignores the drive letter's case (`lsp/fileuri_windows_test.go`).
+Host-specific module imports, dynamic bindings, macros and inferred types are
+not resolved. Unknown names are not errors. The server advertises `textDocument/formatting` (the same
 re-indentation `brote fmt` gives), `textDocument/rename` (for a parameter or local
 binding, its uses in that document; for a top-level name, its top-level
 definitions and the uses that resolve to them in every indexed file, never a

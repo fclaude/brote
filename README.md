@@ -29,6 +29,8 @@ go get github.com/fclaude/brote                        # the library
 
 You need Go 1.26 or newer. Run `brote` with no arguments for a REPL.
 
+Brote runs on Linux, macOS and Windows, and the suite runs on all of them: Linux x86-64 and macOS (Intel and Apple Silicon) on GitHub, Alpine Linux and native Windows on the project's own runners (`.gitea/workflows/ci.yml`). Two things are different on Windows. The REPL reads lines as they come, with no line editing, which is written for Linux and the BSDs ([the command page](docs/command.md#the-repl) lists what you get instead), and a timeout on a granted program ends that program alone, since there are no process groups to end with it ([capabilities](docs/capabilities.md) has the exec rules).
+
 ## Embedding
 
 A host registers primitives, and Scheme code calls them by name:

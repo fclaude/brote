@@ -20,20 +20,20 @@ With nothing to run, `brote` reads forms from standard input and prints the valu
 
 At a terminal you can edit what you type. The arrow keys and Ctrl-B, Ctrl-F, Ctrl-A and Ctrl-E move; Backspace, Delete, Ctrl-D, Ctrl-K (to the end of the line), Ctrl-U (to the start), Ctrl-W (a word) and Ctrl-Y (put back what the last of those removed) change the line; Alt-B and Alt-F move by words; Up and Down (or Ctrl-P and Ctrl-N) go through the lines you typed before; Ctrl-L clears the screen; and at the prompt Ctrl-C drops the line and Ctrl-D leaves. A form that isn't finished goes on to the next line.
 
-Tab finishes the name before the cursor from everything the session knows: the procedures, the special forms and what you have defined. If several names fit, it adds what they share, and a second Tab lists them. The lines you typed are kept in `~/.brote_history` (or the file named by `$BROTE_HISTORY`), up to the last thousand when the next session starts. With `TERM=dumb`, or on a system where `brote` cannot set the terminal up, the lines are read as they come, with no editing; `rlwrap brote` adds history and arrow keys there.
+Tab finishes the name before the cursor from everything the session knows: the procedures, the special forms and what you have defined. If several names fit, it adds what they share, and a second Tab lists them. The lines you typed are kept in `~/.brote_history` (`%USERPROFILE%\.brote_history` on Windows, or the file named by `$BROTE_HISTORY`), up to the last thousand when the next session starts. That editing is written for Linux and the BSDs: on Windows, with `TERM=dumb`, or on any system where `brote` cannot set the terminal up, the lines are read as they come, with no editing; `rlwrap brote` adds history and arrow keys there.
 
-A line that starts with a comma is a command for the REPL, not Scheme:
+A line that starts with a comma is a command for the REPL, not Scheme. Only a person at a terminal gets them: piped in, a comma is Scheme's own, and `,help` reads as an unquote and fails. The commands are:
 
 | Command | |
 |---|---|
-| `,help` | list the commands |
+| `,help` (or `,?`) | list the commands |
 | `,doc NAME` | how `NAME` is called and what it does. For a procedure you wrote, it is the string before its body: `(define (double x) "Twice x." (* 2 x))` |
 | `,apropos TEXT` | the procedures and special forms with `TEXT` in their name |
 | `,defs` | the names this session has defined |
 | `,policy` | what this session's scripts are granted, printed the same way as `-print-policy` |
 | `,load FILE` | evaluate the forms in `FILE` |
 | `,time EXPR` | evaluate `EXPR` and say how long it took |
-| `,quit` | leave |
+| `,quit` (or `,q`, `,exit`) | leave |
 
 `(doc 'name)` and `(apropos "text")` do the same from Scheme, in the REPL or in a script. A command is only recognised when a new form starts, so a line that continues an unfinished one is still Scheme (`,x` inside a quasiquote is an unquote).
 

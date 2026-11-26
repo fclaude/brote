@@ -305,7 +305,7 @@ $ brote -allow exec=echo -e '(proc-run (list "ls"))'
 brote: proc-run: ls is not a command this host lets scripts run
 ```
 
-A command the host did not grant is an error, and so is one that cannot start, one that runs past its timeout (it is stopped, with the processes it started), and one that writes more than the limit. A nonzero exit is a result.
+A command the host did not grant is an error, and so is one that cannot start, one that runs past its timeout (it is stopped, and on Unix the processes it started with it; on Windows only the program itself), and one that writes more than the limit. A nonzero exit is a result.
 
 What a granted command does is the command's business. Allowing `git` allows what `git` can be told to do, and allowing `sh`, `python` or `env` allows everything. Grant programs the way you would grant them to a person you do not fully trust.
 
